@@ -4,11 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libra-lm"
-version = "0.8.0"
+version = "0.15.0"
 description = "A GPT-style language model written from scratch on NumPy. No pretrained models, no API keys."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.22"]
+license = {text = "MIT"}
+keywords = ["language-model", "transformer", "gpt", "numpy", "from-scratch", "self-hosted", "agent", "autograd"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/Sweitz1/Libraries-"
+Documentation = "https://github.com/Sweitz1/Libraries-/blob/main/docs/REVIEW.md"
+Changelog = "https://github.com/Sweitz1/Libraries-/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Sweitz1/Libraries-/issues"
 
 [project.optional-dependencies]
 gpu = ["cupy-cuda12x>=12"]
@@ -17,7 +32,8 @@ gpu = ["cupy-cuda12x>=12"]
 libra = "libra.cli:main"
 
 [tool.setuptools]
-packages = ["libra", "libra.webui"]
+packages = ["libra", "libra.webui", "libra.evals"]
 
 [tool.setuptools.package-data]
-"libra.webui" = ["*.html", "*.js", "*.svg", "*.webmanifest"]
+"libra.webui" = ["*.html", "*.js", "*.svg", "*.png", "*.webmanifest"]
+"libra.evals" = ["*.jsonl"]

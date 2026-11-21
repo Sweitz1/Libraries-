@@ -109,7 +109,6 @@ class RemoteServerTest(unittest.TestCase):
         time.sleep(0.05)
         _, tok, _ = checkpoint.load(self.model_dir)
         checkpoint.save(self.model_dir, GPT(GPTConfig(tok.vocab_size, 16, 2, 2, 16, 0.0)), tok, {"step": 2})
-        os.utime(os.path.join(self.model_dir, "model.npz"))
         info = json.loads(self.req("/v1/info")[2])
         self.assertIsNot(self.engine.model, old)
         self.assertEqual(self.engine.model.config.n_layer, 2)

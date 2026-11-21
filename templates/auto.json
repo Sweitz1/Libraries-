@@ -1,0 +1,73 @@
+{
+  "name": "my-model",
+  "enabled": true,
+  "sources": [
+    {
+      "crawl": "https://example.com/docs/",
+      "max_pages": 100,
+      "depth": 2,
+      "include": "",
+      "exclude": ""
+    },
+    {
+      "feed": "https://example.com/blog/feed.xml",
+      "max_items": 20
+    },
+    {
+      "sitemap": "https://example.com/sitemap.xml",
+      "max_pages": 50
+    },
+    {
+      "url": "https://example.com/about"
+    },
+    {
+      "gutenberg": 1342
+    },
+    {
+      "files": "~/my-notes"
+    }
+  ],
+  "dataset": "datasets/auto",
+  "model": "checkpoints/auto",
+  "model_config": {
+    "layers": 4,
+    "embd": 128,
+    "heads": 4,
+    "ctx": 128,
+    "vocab": 1024,
+    "batch": 16,
+    "dropout": 0.1,
+    "lr": 0.003
+  },
+  "steps_per_run": 2000,
+  "filters": {
+    "min_chars": 300,
+    "language": "en",
+    "min_language_confidence": 0.4,
+    "max_symbol_ratio": 0.25,
+    "max_repeated_line_ratio": 0.3,
+    "mask_personal_info": true
+  },
+  "limits": {
+    "max_pages_per_run": 300,
+    "max_dataset_mb": 500,
+    "max_minutes": 120,
+    "min_free_disk_mb": 2000,
+    "delay_seconds": 1.0,
+    "retries": 2,
+    "retry_delay_seconds": 5
+  },
+  "gate": {
+    "holdout_fraction": 0.05,
+    "max_regression": 0.02,
+    "eval_suite": "",
+    "max_eval_drop": 0.0
+  },
+  "discover": true,
+  "notify": {
+    "url": "",
+    "on": "changes"
+  },
+  "allow_private": false,
+  "device": "auto"
+}

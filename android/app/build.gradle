@@ -1,0 +1,62 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ai.libra.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ai.libra.app'
+        minSdk 26          // Android 8.0 and newer
+        targetSdk 34
+        versionCode 1
+        versionName '0.15.0'
+    }
+
+    signingConfigs {
+        // Release signing from CI secrets when they exist; otherwise the debug key, so the
+        // release APK can always be installed by hand.
+        release {
+            def ks = System.getenv('LIBRA_KEYSTORE_PATH')
+            if (ks != null && new File(ks).exists()) {
+                storeFile file(ks)
+                storePassword System.getenv('LIBRA_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('LIBRA_KEY_ALIAS')
+                keyPassword System.getenv('LIBRA_KEY_PASSWORD')
+            } else {
+                def dbg = signingConfigs.getByName('debug')
+                storeFile dbg.storeFile
+                storePassword dbg.storePassword
+                keyAlias dbg.keyAlias
+                keyPassword dbg.keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    // No libraries in the app itself: only the Android framework.
+    testImplementation 'junit:junit:4.13.2'
+}

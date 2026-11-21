@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest something Libra should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The goal, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Libra's ground rules
+      description: Libra uses no pretrained models, no outside AI services, and only NumPy plus the standard library.
+      options:
+        - label: This fits those rules, or I've explained above why an exception is worth it.

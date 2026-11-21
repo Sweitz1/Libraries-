@@ -244,7 +244,7 @@ def cmd_serve(args) -> None:
     print(f"device: {B.use(args.device)}")
     ws = _workspace(args)
     model = tok = None
-    if os.path.exists(os.path.join(args.model, "model.npz")):
+    if checkpoint.exists(args.model):
         model, tok, _ = checkpoint.load(args.model)
     elif ws is None:
         print(f"note: no trained model in {args.model}; the app works for files, translation and skills, "
@@ -257,8 +257,10 @@ def cmd_serve(args) -> None:
     if auto_config and not os.path.exists(auto_config):
         raise SystemExit(f"no auto config at {auto_config} (create one with: libra auto init {args.auto_config})")
     engine = Engine(model, tok, name=args.name, skills=skills, auto_skills=args.auto_skills, workspace=ws,
-                    token=token, auto_config=auto_config)
+                    token=token, auto_config=auto_config,
+                    cors_origins=(args.cors_origin or []) + os.environ.get("LIBRA_CORS_ORIGINS", "").split(","))
     engine.watch_model(os.path.abspath(args.model))  # new training results are picked up without a restart
+    engine.resume_jobs()  # goals interrupted by a crash or restart carry on
     serve(engine, args.host, args.port)
 
 
@@ -514,7 +516,7 @@ def cmd_translate(args) -> None:
     elif a == "model":
         src, tgt = lang(args.src, "src"), lang(args.tgt, "tgt")
         path = items[0] if items else None
-        if path and not os.path.exists(os.path.join(path, "model.npz")):
+        if path and not checkpoint.exists(path):
             raise SystemExit(f"no trained model in {path}")
         t.set_model(src, tgt, path)
         print(f"{name(src)}→{name(tgt)} model: {path or '(removed)'}")
@@ -572,6 +574,333 @@ def cmd_auto(args) -> None:
         else:
             print("Linux/macOS (crontab -e, then add this line), or rerun with --install:\n  " + lines["cron"])
             print("Windows (Command Prompt):\n  " + lines["windows"])
+
+
+def cmd_agent(args) -> None:
+    from . import agent
+
+    a, items = args.action, args.items
+    if a in ("plan", "run"):
+        goal = " ".join(items)
+        if not goal:
+            raise SystemExit(f'usage: libra agent {a} "your goal"')
+        skills = _registry(args)
+        p = agent.plan(goal, skills)
+        print(p.describe())
+        if a == "plan" or not p.ok:
+            if not p.ok:
+                raise SystemExit(1)
+            return
+        print()
+        r = agent.execute(p, skills, args.max_steps, args.max_items, args.max_minutes * 60,
+                          log=lambda m: print("… " + m))
+        agent.record(r)
+        print("\n" + r.describe())
+        if r.status != "done":
+            raise SystemExit(1)
+    elif a == "auto":
+        from .autonomy import pursue
+
+        goal = " ".join(items)
+        if not goal:
+            raise SystemExit('usage: libra agent auto "your goal"')
+        r = pursue(goal, _registry(args), args.max_steps, args.max_items, args.max_minutes * 60,
+                   log=lambda m: print("… " + m))
+        agent.record(r)
+        print("\n" + r.describe())
+        if r.status != "done":
+            raise SystemExit(1)
+    elif a == "procedures":
+        procs = agent.load_procedures()
+        if items and items[0] == "forget":
+            shape = " ".join(items[1:])
+            if shape in procs:
+                procs.pop(shape)
+                with open(agent._path("procedures.json"), "w", encoding="utf-8") as f:
+                    json.dump(procs, f, indent=2)
+                print("forgotten")
+            else:
+                print("no such procedure (copy its shape from: libra agent procedures)")
+            return
+        if not procs:
+            print("no learned procedures yet (successful 'libra agent auto' runs are learned)")
+        for shape, pr in sorted(procs.items()):
+            print(f"  {shape}\n      → {' → '.join(st['skill'] for st in pr['steps'])}"
+                  f"{'  (repaired)' if pr.get('note') == 'repaired' else ''}; learned from: {pr['learned_from'][:60]}")
+    elif a == "add":
+        if len(items) < 2:
+            raise SystemExit('usage: libra agent add NAME "goal" [--every daily@07:00]')
+        p = agent.add_goal(items[0], " ".join(items[1:]), args.every, _registry(args, interactive=False),
+                           autonomous=args.auto, allow=args.allow)
+        perms = agent.goal_permissions(items[0]) or {}
+        print(f"may use only: {', '.join(perms.get('skills') or [])}"
+              + (f"; runs without asking: {', '.join(perms['preapproved'])}" if perms.get("preapproved") else ""))
+        print(p.describe())
+        print(f"\nsaved as {items[0]!r}" + (f", runs {args.every}" if args.every else " (run it with: libra agent "
+                                                                                     f"start {items[0]})"))
+    elif a == "start":
+        goals = agent.load_goals()
+        if not items or items[0] not in goals:
+            raise SystemExit(f"unknown goal; saved goals: {', '.join(sorted(goals)) or 'none'}")
+        r = agent.run_goal(goals[items[0]]["goal"], _registry(args), name=items[0], log=lambda m: print("… " + m),
+                           max_steps=args.max_steps, max_items=args.max_items, max_seconds=args.max_minutes * 60)
+        print("\n" + r.describe())
+    elif a == "list":
+        goals = agent.load_goals()
+        if not goals:
+            print('no saved goals (libra agent add NAME "goal" --every daily@07:00)')
+        for name, g in sorted(goals.items()):
+            last = g.get("last_run") or "never"
+            print(f"  {name}: {g['goal']}\n      every: {g.get('every') or 'manual'}; last run: {last}"
+                  f"{' (' + g['last_status'] + ')' if g.get('last_status') else ''}")
+    elif a == "remove":
+        print("removed" if items and agent.remove_goal(items[0]) else "no such goal")
+    elif a == "runs":
+        for r in agent.recent_runs(args.n):
+            print(f"{r['started']}  {r['status']:<8} {r.get('name') or '-':<12} {r['goal'][:70]}")
+    elif a == "run-due":
+        for r in agent.run_due(_registry(args, interactive=False)):
+            print(f"{r.name}: {r.status}")
+
+
+def cmd_jobs(args) -> None:
+    from . import agent, jobs
+
+    a, items = args.action, args.items
+    show = lambda job: print(jobs.describe(job))  # noqa: E731
+    try:
+        if a == "start":
+            goal = " ".join(items)
+            if not goal:
+                raise SystemExit('usage: libra jobs start "your goal"')
+            reg = _registry(args)
+            job = jobs.create(goal, reg, name=args.name or "", autonomous=args.auto, max_steps=args.max_steps,
+                              max_items=args.max_items, max_seconds=args.max_minutes * 60)
+            print(f"job {job['id']}")
+            job = jobs.run(job["id"], reg, log=lambda m: print("… " + m))
+            agent.record(jobs.to_run(job))
+            print()
+            show(job)
+            if job["status"] not in ("done", "waiting"):
+                raise SystemExit(1)
+        elif a == "list":
+            rows = jobs.listing(args.n)
+            if not rows:
+                print('no jobs yet (libra jobs start "your goal")')
+            for j in rows:
+                state = "running" if j["running"] else j["status"]
+                print(f"  {j['id']}  {state:<12} {j['steps_done']}/{j['steps']}  {(j['name'] or '-'):<10} "
+                      f"{j['goal'][:60]}")
+        elif a == "show":
+            if not items:
+                raise SystemExit("usage: libra jobs show <id>")
+            show(jobs.get(items[0]))
+            if args.events:
+                for e in jobs.events(items[0]):
+                    extra = {k: v for k, v in e.items() if k not in ("at", "event")}
+                    print(f"  {e['at']}  {e['event']}  {json.dumps(extra, ensure_ascii=False) if extra else ''}")
+        elif a in ("resume", "approve", "skip"):
+            reg = _registry(args)
+            if a == "resume" and not items:
+                for job in jobs.resume_all(reg, log=lambda m: print("… " + m)):
+                    agent.record(jobs.to_run(job))
+                    print(f"{job['id']}: {job['status']}")
+                return
+            if not items:
+                raise SystemExit(f"usage: libra jobs {a} <id>")
+            if a == "approve":
+                jobs.approve(items[0], by="owner (terminal)")
+            elif a == "skip":
+                jobs.skip(items[0], by="owner (terminal)")
+            job = jobs.run(items[0], reg, log=lambda m: print("… " + m))
+            agent.record(jobs.to_run(job))
+            show(job)
+        elif a == "cancel":
+            if not items:
+                raise SystemExit("usage: libra jobs cancel <id>")
+            job = jobs.cancel(items[0], by="owner (terminal)")
+            print(f"{job['id']}: {job['status']}" + ("" if job["status"] == "cancelled" else
+                                                       " (it stops at its next step)"))
+    except jobs.JobError as exc:
+        raise SystemExit(str(exc))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+
+def cmd_eval(args) -> None:
+    from . import evaluate
+
+    if args.action == "history":
+        rows = evaluate.history()
+        if not rows:
+            print("no results yet (libra eval plan, or libra eval model <checkpoint>)")
+        for r in rows[-args.n:]:
+            what = r.get("suite") if r["kind"] == "plan" else f"{os.path.basename(r.get('model', ''))}@{r.get('version')}"
+            print(f"  {r['at'][:16].replace('T', ' ')}  {r['kind']:<5} {what:<36} "
+                  + "  ".join(f"{k}={v}" for k, v in evaluate.headline(r).items() if v is not None))
+        return
+    if args.action == "plan":
+        result = evaluate.plan_suite(_registry(args, interactive=False), args.suite or evaluate.DEFAULT_PLAN_SUITE)
+    else:
+        if not args.model:
+            raise SystemExit("usage: libra eval model <checkpoint> [--text heldout.txt] [--suite suite.jsonl]")
+        result = evaluate.evaluate_model(args.model, args.text, None if args.no_suite else
+                                         (args.suite or evaluate.DEFAULT_MODEL_SUITE))
+    prev = None if args.no_record else evaluate.record(result)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(evaluate.describe(result, prev))
+
+
+def cmd_discord(args) -> None:
+    from . import discord, home
+
+    cfg = discord.load_config()
+    a, items = args.action, args.items
+    if a == "setup":
+        import getpass
+
+        path = args.token_file or home.path("discord-token")
+        if os.environ.get("DISCORD_TOKEN"):
+            token = os.environ["DISCORD_TOKEN"].strip()
+        elif sys.stdin.isatty():
+            print("Create a bot at https://discord.com/developers/applications (New Application → Bot → Reset Token).")
+            token = getpass.getpass("Paste the bot token (hidden): ").strip()
+        else:
+            token = sys.stdin.readline().strip()
+        if not token:
+            raise SystemExit("no token given")
+        me = discord.REST(token).me()
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(token + "\n")
+        discord.save_config(cfg)
+        print(f"Token OK: the bot is {me.get('username')} ({me['id']}). Saved to {path} (only you can read it).")
+        print(f"\n1. Invite it to your server:\n   {discord.invite_url(me['id'])}")
+        print("2. Allow yourself to give it goals: turn on Developer Mode in Discord (Settings → Advanced),")
+        print("   right-click your name → Copy User ID, then:  libra discord allow <that ID>")
+        print("3. Start it:  libra discord run   (the Debian service starts it automatically)")
+    elif a == "check":
+        me = discord.REST(discord.read_token(args.token_file)).me()
+        print(f"OK: {me.get('username')} ({me['id']})\ninvite: {discord.invite_url(me['id'])}")
+    elif a in ("allow", "disallow"):
+        if not items or not all(i.isdigit() for i in items):
+            raise SystemExit(f"usage: libra discord {a} <numeric user ID> […]")
+        users = set(map(str, cfg.get("allowed_users") or []))
+        users = users | set(items) if a == "allow" else users - set(items)
+        cfg["allowed_users"] = sorted(users)
+        discord.save_config(cfg)
+        print("allowed users: " + (", ".join(cfg["allowed_users"]) or "none"))
+    elif a == "set":
+        if len(items) < 2 or items[0] not in ("prefix", "dm", "channels", "listen_channels", "notify_channel"):
+            raise SystemExit("usage: libra discord set prefix|dm|channels|listen_channels|notify_channel VALUE "
+                             "(channel lists: comma-separated IDs, or '' for none)")
+        key, value = items[0], " ".join(items[1:])
+        if key == "dm":
+            cfg[key] = value.lower() in ("1", "true", "yes", "on")
+        elif key in ("channels", "listen_channels"):
+            cfg[key] = [v.strip() for v in value.split(",") if v.strip()]
+        else:
+            cfg[key] = value
+        discord.save_config(cfg)
+        print(json.dumps(cfg, indent=2))
+    elif a == "config":
+        print(json.dumps(cfg, indent=2))
+    elif a == "send":
+        if len(items) < 2:
+            raise SystemExit('usage: libra discord send <channel ID> "message"')
+        discord.REST(discord.read_token(args.token_file)).send(items[0], " ".join(items[1:]))
+        print("sent")
+    else:  # run
+        token = discord.read_token(args.token_file)
+        ws = _workspace(args)
+        model = tok = None
+        if args.model and checkpoint.exists(args.model):
+            model, tok, _ = checkpoint.load(args.model)
+        bot = discord.Bot(token, _registry(args, interactive=False), workspace=ws, model=model, tokenizer=tok,
+                          auto_config=args.auto_config)  # reads ~/.libra/discord.json and follows changes
+        print("libra discord: connecting… (Ctrl+C to stop)")
+        try:
+            bot.run_forever()
+        except KeyboardInterrupt:
+            bot.stop()
+
+
+def cmd_memory(args) -> None:
+    from .memory import Memory, describe
+
+    mem = Memory()
+    text = " ".join(args.items)
+    if args.action == "add":
+        if not text:
+            raise SystemExit('usage: libra memory add "a fact to keep"')
+        print(f"remembered (#{mem.add(text, source='cli')['id']})")
+    elif args.action == "search":
+        print(describe([it for _, it in mem.search(text, args.n)]))
+    elif args.action == "forget":
+        gone = mem.forget(text.lstrip("#"))
+        print(f"forgot {len(gone)}" if gone else "nothing matched")
+    else:
+        print(describe(sorted(mem.items, key=lambda it: it["updated"], reverse=True)[: args.n])
+              if mem.items else "memory is empty")
+
+
+def cmd_devices(args) -> None:
+    from . import devices
+
+    if args.action == "add":
+        token, rec = devices.create(" ".join(args.items))
+        print(f"device '{rec['name']}' (#{rec['id']}); its token (shown once, use it as the API key):\n  {token}")
+    elif args.action == "revoke":
+        if not args.items:
+            raise SystemExit("usage: libra devices revoke <id>")
+        gone = devices.revoke(args.items[0])
+        print(("revoked: " + ", ".join(gone)) if gone else "no such device")
+    else:
+        rows = devices.listing()
+        if not rows:
+            print("no paired devices (libra pair creates one per scan)")
+        for d in rows:
+            print(f"  #{d['id']}  {d['name']}  created {d['created'][:16].replace('T', ' ')} by {d['created_by']}; "
+                  f"last seen {(d.get('last_seen') or 'never')[:16].replace('T', ' ')}")
+
+
+def cmd_pair(args) -> None:
+    from . import pair
+
+    token = None
+    if args.token_file:
+        with open(args.token_file, encoding="utf-8") as f:
+            token = f.read().strip()
+    elif os.environ.get("LIBRA_TOKEN"):
+        token = os.environ["LIBRA_TOKEN"]
+    else:
+        from . import home
+
+        path = home.path("server-token")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                token = f.read().strip()
+    bases = [(pair.describe(u), u) for u in args.url] or pair.candidate_urls(args.port, args.local_only)
+    if not bases:
+        raise SystemExit("no address found to pair with; pass --url https://… or http://<ip>:<port>")
+    if token and not args.main_token:  # links carry a device token of their own, revocable on its own
+        from . import devices
+
+        token, record = devices.create(args.name or "", created_by="owner")
+        print(f"New device token '{record['name']}' (#{record['id']}); revoke it with: libra devices revoke "
+              f"{record['id']}\n")
+    make = pair.app_link if args.app else pair.link
+    best = make(bases[0][1], token)
+    what = "the Libra Android app" if args.app else "the app in the phone's browser"
+    print(f"Scan with your phone's camera to open {what} ({bases[0][0]}):\n")
+    print(pair.qr_terminal(best))
+    print(f"\n  {best}")
+    for label, base in bases[1:]:
+        print(f"  {make(base, token)}   ({label})")
+    if not token:
+        print("\n(no token found: these links work only if the server runs with --no-auth)")
 
 
 def cmd_scrape(args) -> None:
@@ -702,6 +1031,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="phone/browser app plus OpenAI-compatible API")
     s.add_argument("--model", default="checkpoints/model")
     s.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to allow phones on your Wi-Fi")
+    s.add_argument("--cors-origin", action="append", metavar="URL",
+                   help="let a web page on this origin call the API (repeatable; the built-in app doesn't need it)")
     s.add_argument("--token", help="access token (default for network hosts: one saved in ~/.libra/server-token)")
     s.add_argument("--token-file", help="read the access token from this file (created if missing)")
     s.add_argument("--no-auth", action="store_true", help="no token at all (only for trusted, local use)")
@@ -782,6 +1113,80 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--at", default="02:30", help="schedule: daily time HH:MM")
     au.add_argument("--install", action="store_true", help="schedule: add it to your crontab (Linux/macOS)")
     au.set_defaults(func=cmd_auto)
+
+    ag = sub.add_parser("agent", help="give a goal in plain words; Libra plans the steps and runs your skills")
+    ag.add_argument("action", choices=["plan", "run", "auto", "add", "start", "list", "remove", "runs", "run-due",
+                                       "procedures"])
+    ag.add_argument("items", nargs="*", help="the goal (plan/run), or NAME and goal (add), or NAME (start/remove)")
+    ag.add_argument("--every", help="add: hourly, daily, weekly, 30m, 6h, daily@07:00, weekdays@08:30, weekly@09:00")
+    ag.add_argument("--auto", action="store_true", help="add: run the saved goal in autonomous mode")
+    ag.add_argument("--allow", action="append", metavar="SKILL",
+                    help="add: a skill of this goal that may run without asking (repeatable; deny rules still win)")
+    ag.add_argument("--max-steps", type=int, default=10)
+    ag.add_argument("--max-items", type=int, default=5, help="most items one 'each of them' step goes through")
+    ag.add_argument("--max-minutes", type=float, default=5)
+    ag.add_argument("-n", type=int, default=20, help="runs: how many")
+    ag.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
+    _add_skill_flags(ag)
+    ag.set_defaults(func=cmd_agent)
+
+    ev = sub.add_parser("eval", help="benchmarks: planner tool choice, model loss and behaviour, history")
+    ev.add_argument("action", choices=["plan", "model", "history"])
+    ev.add_argument("model", nargs="?", help="model: the checkpoint to score")
+    ev.add_argument("--suite", help="a JSON Lines suite (default: the built-in one)")
+    ev.add_argument("--text", help="model: held-out text file for loss and perplexity")
+    ev.add_argument("--no-suite", action="store_true", help="model: only the held-out text")
+    ev.add_argument("--no-record", action="store_true", help="don't add this result to the history")
+    ev.add_argument("--json", action="store_true")
+    ev.add_argument("-n", type=int, default=30, help="history: how many")
+    _add_skill_flags(ev)
+    ev.set_defaults(func=cmd_eval)
+
+    jb = sub.add_parser("jobs", help="durable goals: survive restarts, pause for approval, end with a checked result")
+    jb.add_argument("action", choices=["start", "list", "show", "resume", "approve", "skip", "cancel"])
+    jb.add_argument("items", nargs="*", help="start: the goal; others: a job id (resume without one: all)")
+    jb.add_argument("--name", help="start: a label for the job")
+    jb.add_argument("--auto", action="store_true", help="start: repair the plan with weaker read-only matches")
+    jb.add_argument("--events", action="store_true", help="show: also print the job's event log")
+    jb.add_argument("--max-steps", type=int, default=12)
+    jb.add_argument("--max-items", type=int, default=5)
+    jb.add_argument("--max-minutes", type=float, default=10, help="time limit per run (resume continues)")
+    jb.add_argument("-n", type=int, default=20, help="list: how many")
+    jb.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
+    _add_skill_flags(jb)
+    jb.set_defaults(func=cmd_jobs)
+
+    dc = sub.add_parser("discord", help="run Libra as a Discord bot (server channels and direct messages)")
+    dc.add_argument("action", choices=["setup", "check", "allow", "disallow", "set", "config", "send", "run"])
+    dc.add_argument("items", nargs="*")
+    dc.add_argument("--token-file", help="bot token file (default: DISCORD_TOKEN or ~/.libra/discord-token)")
+    dc.add_argument("--model", help="run: a trained model to chat with")
+    dc.add_argument("--auto-config", help="run: training config, for the status command")
+    _add_workspace_flags(dc)
+    _add_skill_flags(dc)
+    dc.set_defaults(func=cmd_discord)
+
+    me = sub.add_parser("memory", help="long-term memory: facts and preferences kept between conversations")
+    me.add_argument("action", choices=["add", "search", "forget", "list"])
+    me.add_argument("items", nargs="*")
+    me.add_argument("-n", type=int, default=20)
+    me.set_defaults(func=cmd_memory)
+
+    pr = sub.add_parser("pair", help="show a QR code to open the app on your phone, already signed in")
+    pr.add_argument("--port", type=int, default=8000)
+    pr.add_argument("--url", action="append", default=[], help="address to use instead of the detected ones")
+    pr.add_argument("--token-file", help="token file (default: LIBRA_TOKEN or ~/.libra/server-token)")
+    pr.add_argument("--local-only", action="store_true", help="only offer the Tailscale HTTPS address")
+    pr.add_argument("--name", help="a name for the new device, e.g. 'Ana's phone'")
+    pr.add_argument("--app", action="store_true", help="a code for the Libra Android app instead of the browser")
+    pr.add_argument("--main-token", action="store_true",
+                    help="put the server's main token in the link instead of a new device token")
+    pr.set_defaults(func=cmd_pair)
+
+    dv = sub.add_parser("devices", help="paired devices: list, add or revoke their access tokens")
+    dv.add_argument("action", choices=["list", "add", "revoke"])
+    dv.add_argument("items", nargs="*", help="add: a name; revoke: a device id")
+    dv.set_defaults(func=cmd_devices)
 
     w = sub.add_parser("scrape", help="extract text, tables, links or CSS-selected elements from a web page")
     w.add_argument("url")

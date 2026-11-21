@@ -149,7 +149,9 @@ class AutoRunTest(unittest.TestCase):
         self.assertGreater(r4.steps, 0)
         self.assertTrue(os.path.exists(model + ".previous"))
         auto.rollback(self.cfg_path)
-        self.assertTrue(os.path.exists(os.path.join(model, "model.npz")))
+        from libra import checkpoint
+
+        self.assertTrue(checkpoint.exists(model))
 
     def test_lock_and_time_limit_and_schedule(self):
         from libra import auto

@@ -36,6 +36,10 @@ DEFAULT_PLUGIN_DIR = os.path.join(os.environ.get("LIBRA_HOME") or os.path.join(o
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 
 
+# built-in skills whose output is outside content: web pages, and memories (which hold earlier results)
+EXTERNAL_BUILTINS = frozenset({"scrape", "crawl", "links", "recall"})
+
+
 @dataclass
 class Skill:
     name: str
@@ -46,6 +50,16 @@ class Skill:
     source: str = "builtin"
     risk: str = "read"  # read, write or danger (see libra.trust)
     input_schema: dict | None = None  # JSON schema for catalog skills (MCP tools, API operations)
+    external: bool | None = None  # returns outside content (web pages, other services)? None: decide by kind
+
+    @property
+    def untrusted_output(self) -> bool:
+        """True if what this skill returns comes from outside (a web page, an MCP server, an API, or
+        stored text that may have come from those). Such text is data, never instructions: it can't
+        drive a change without a person approving it (see :mod:`libra.jobs`)."""
+        if self.external is not None:
+            return self.external
+        return self.name in EXTERNAL_BUILTINS or self.input_schema is not None
 
     def signature(self) -> inspect.Signature:
         return inspect.signature(self.func)
@@ -179,14 +193,16 @@ class SkillRegistry:
         return s
 
     def skill(self, name: str | None = None, description: str = "", params: dict | None = None, router=None,
-              risk: str = "write"):
+              risk: str = "write", external: bool | None = None):
         """Decorator registering a function as a skill in this registry.
 
-        ``risk`` is "read", "write" (the default, so you're asked before it runs) or "danger"."""
+        ``risk`` is "read", "write" (the default, so you're asked before it runs) or "danger".
+        ``external=True`` marks a skill whose output comes from outside (web, another service)."""
 
         def wrap(func):
             self.register(Skill(name or func.__name__, description or (func.__doc__ or "").strip(), func,
-                                params or {}, router, source=getattr(func, "__module__", "plugin"), risk=risk))
+                                params or {}, router, source=getattr(func, "__module__", "plugin"), risk=risk,
+                                external=external))
             return func
 
         return wrap
@@ -203,8 +219,11 @@ class SkillRegistry:
     def __contains__(self, name: str) -> bool:
         return name in self._skills or self._from_catalog(name) is not None
 
-    def check(self, s: Skill, args: dict) -> tuple[bool, str]:
-        """Apply the trust policy. Returns (allowed, decision or explanation)."""
+    def check(self, s: Skill, args: dict, approved: bool = False) -> tuple[bool, str]:
+        """Apply the trust policy. Returns (allowed, decision or explanation).
+
+        ``approved`` is an approval already given for this one call (e.g. a job step the owner
+        approved). It answers "ask"; it never overrides "deny"."""
         if self.policy is None:
             return True, "allow"
         decision, reason = self.policy.decide(s.name, s.risk)
@@ -212,7 +231,7 @@ class SkillRegistry:
             return True, "allow"
         if decision == "deny":
             return False, (f"'{s.name}' is blocked ({reason}). To allow it: libra trust allow {s.name}")
-        if self.confirm is not None and self.confirm(s, args):
+        if approved or (self.confirm is not None and self.confirm(s, args)):
             return True, "approved"
         return False, (f"'{s.name}' is a {s.risk} skill and needs your approval ({reason}). "
                        f"Approve it when asked in chat, or allow it: libra trust allow {s.name}")
@@ -220,7 +239,7 @@ class SkillRegistry:
     def list(self) -> list[Skill]:
         return [self._skills[k] for k in sorted(self._skills)]
 
-    def run(self, name: str, args: dict | None = None) -> SkillResult:
+    def run(self, name: str, args: dict | None = None, approved: bool = False) -> SkillResult:
         decision, s = "allow", None
         try:
             s = self.get(name)
@@ -236,7 +255,7 @@ class SkillRegistry:
                         raise TypeError(f"{name} has no parameter {key!r}; it takes {', '.join(sig.parameters)}")
                     kwargs[key] = _coerce(value, sig.parameters[key].annotation)
                 sig.bind(**kwargs)  # report missing arguments clearly
-            allowed, decision = self.check(s, kwargs)
+            allowed, decision = self.check(s, kwargs, approved)
             if not allowed:
                 self._audit(s, kwargs, "deny", None)
                 return SkillResult(name, False, decision)
@@ -333,12 +352,13 @@ _target: SkillRegistry | None = None  # registry receiving @skill while a plugin
 
 
 def skill(name: str | None = None, description: str = "", params: dict | None = None, router=None,
-          risk: str = "write"):
-    """Register a skill from a plugin file. ``risk``: "read", "write" (default) or "danger"."""
+          risk: str = "write", external: bool | None = None):
+    """Register a skill from a plugin file. ``risk``: "read", "write" (default) or "danger".
+    ``external=True``: its output comes from outside (a web page, another service)."""
 
     def wrap(func):
         registry = _target or _default
-        return registry.skill(name, description, params, router, risk)(func)
+        return registry.skill(name, description, params, router, risk, external)(func)
 
     return wrap
 
@@ -408,6 +428,27 @@ def _route_translate(message: str):
     return None
 
 
+def _route_remember(message: str):
+    from .memory import REMEMBER_RE
+
+    m = REMEMBER_RE.match(message)
+    return {"text": m.group("x").strip()} if m else None
+
+
+def _route_recall(message: str):
+    from .memory import RECALL_RE
+
+    m = RECALL_RE.match(message)
+    return {"query": m.group("x")} if m else None
+
+
+def _route_forget(message: str):
+    from .memory import FORGET_RE
+
+    m = FORGET_RE.match(message)
+    return {"what": m.group("x")} if m else None
+
+
 def _route_detect(message: str):
     m = re.match(r"^\s*(?:what|which)\s+language\s+is\s+(?:this|that|it)?\s*[:\-]?\s*(?P<q>.+?)\s*\??\s*$",
                  message, re.I | re.S)
@@ -443,6 +484,28 @@ def fetcher(allow_private: bool = False, delay: float = 0.0):
 
 def _truncate(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[:max_chars].rstrip() + f"\n… ({len(text) - max_chars:,} more characters)"
+
+
+def extractive_summary(text: str, n: int = 3) -> str:
+    """The ``n`` sentences that best cover the text's frequent words, in their original order."""
+    from collections import Counter
+
+    from .knowledge import sentences, terms
+
+    sents = [s for s in sentences(re.sub(r"(?m)^#+\s*", "", text)) if len(s.split()) >= 5]
+    if len(sents) <= n:
+        return " ".join(sents) or text.strip()[:500]
+    freq = Counter(t for s in sents for t in set(terms(s)))
+    top = max(freq.values())
+    scored = []
+    for i, s in enumerate(sents):
+        words = terms(s)
+        if not words:
+            continue
+        score = sum(freq[w] / top for w in set(words)) / (len(set(words)) ** 0.5)
+        scored.append((score - 0.02 * i, i))  # slight preference for earlier sentences
+    keep = sorted(i for _, i in sorted(scored, reverse=True)[:n])
+    return " ".join(sents[i] for i in keep)
 
 
 def _register_builtins(reg: SkillRegistry) -> None:
@@ -533,6 +596,34 @@ def _register_builtins(reg: SkillRegistry) -> None:
         from .lang import romanize as rz
 
         return rz(text)
+
+    @reg.skill("remember", "Keep a fact or preference in long-term memory.", {"text": "what to remember"},
+               router=_route_remember, risk="write")
+    def remember(text: str):
+        from .memory import Memory
+
+        it = Memory().add(text, source="chat")
+        return f"I'll remember that. (#{it['id']})"
+
+    @reg.skill("recall", "Look something up in long-term memory.", {"query": "what to look for"},
+               router=_route_recall, risk="read")
+    def recall(query: str):
+        from .memory import Memory, describe
+
+        return describe(Memory().recall(query))
+
+    @reg.skill("forget", "Remove memories (by #id, or ones that match closely).", {"what": "#id or words"},
+               router=_route_forget, risk="write")
+    def forget(what: str):
+        from .memory import Memory
+
+        gone = Memory().forget(what.lstrip("#"))
+        return f"Forgot {len(gone)} memor{'y' if len(gone) == 1 else 'ies'}." if gone else "Nothing matched."
+
+    @reg.skill("summarize", "Shorten a text to its most important sentences (taken word for word from it).",
+               {"text": "the text to summarize", "sentences": "how many sentences to keep"}, risk="read")
+    def summarize(text: str, sentences: int = 3):
+        return extractive_summary(text, sentences)
 
     @reg.skill("time", "Current local date and time.", router=_route_time, risk="read")
     def time_skill():
