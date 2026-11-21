@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import autograd as ag
+from . import backend as B
 from . import checkpoint
 from .autograd import no_grad
 from .chat import render_document
@@ -43,6 +44,7 @@ class TrainConfig:
     seed: int = 1337
     resume: bool = False
     sample_prompt: str = ""
+    device: str = "auto"
 
 
 def _iter_files(paths: list[str]):
@@ -99,6 +101,7 @@ def estimate_loss(model: GPT, data: np.ndarray, cfg: TrainConfig, rng: np.random
 
 
 def train(cfg: TrainConfig, log=print) -> GPT:
+    log(f"device: {B.use(cfg.device)}")
     ag.seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
     text = load_corpus(cfg.data)

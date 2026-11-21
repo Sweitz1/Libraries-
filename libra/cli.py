@@ -5,6 +5,7 @@ import argparse
 import sys
 
 from . import chat as chat_fmt
+from . import backend as B
 from . import checkpoint
 from .generate import SamplingParams, stream_text
 
@@ -16,6 +17,11 @@ def _add_sampling(p: argparse.ArgumentParser) -> None:
     p.add_argument("--top-p", type=float, default=0.95)
     p.add_argument("--repetition-penalty", type=float, default=1.1)
     p.add_argument("--seed", type=int, default=None)
+
+
+def _add_device(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--device", default="auto", choices=["auto", "cpu", "gpu"],
+                   help="gpu needs an NVIDIA GPU and CuPy (pip install cupy-cuda12x)")
 
 
 def _sampling(args) -> SamplingParams:
@@ -30,12 +36,13 @@ def cmd_train(args) -> None:
         data=args.data, out=args.out, vocab_size=args.vocab, block_size=args.ctx, n_layer=args.layers,
         n_head=args.heads, n_embd=args.embd, dropout=args.dropout, batch_size=args.batch, steps=args.steps,
         lr=args.lr, warmup=args.warmup, eval_every=args.eval_every, log_every=args.log_every,
-        seed=args.seed, resume=args.resume, sample_prompt=args.sample_prompt,
+        seed=args.seed, resume=args.resume, sample_prompt=args.sample_prompt, device=args.device,
     )
     train(cfg)
 
 
 def cmd_generate(args) -> None:
+    B.use(args.device)
     model, tok, _ = checkpoint.load(args.model)
     sys.stdout.write(args.prompt)
     for piece in stream_text(model, tok, args.prompt, _sampling(args), stop_tokens=chat_fmt.STOP_TOKENS):
@@ -45,6 +52,7 @@ def cmd_generate(args) -> None:
 
 
 def cmd_chat(args) -> None:
+    B.use(args.device)
     model, tok, _ = checkpoint.load(args.model)
     params = _sampling(args)
     history: list[dict] = [{"role": "system", "content": args.system}] if args.system else []
@@ -78,8 +86,35 @@ def cmd_chat(args) -> None:
 def cmd_serve(args) -> None:
     from .server import Engine, serve
 
+    print(f"device: {B.use(args.device)}")
     model, tok, _ = checkpoint.load(args.model)
     serve(Engine(model, tok, name=args.name), args.host, args.port)
+
+
+def cmd_data(args) -> None:
+    from .dataset import Dataset
+
+    ds = Dataset(min_chars=args.min_chars)
+    print("reading sources:")
+    for path in args.inputs:
+        ds.add_path(path)
+    for url in args.url:
+        try:
+            ds.add_url(url)
+        except Exception as exc:  # keep going with the other sources
+            print(f"  {url}: download failed ({exc})")
+    for book in args.gutenberg:
+        try:
+            ds.add_gutenberg(book)
+        except Exception as exc:
+            print(f"  gutenberg #{book}: download failed ({exc})")
+    if not ds.texts and not ds.chats:
+        raise SystemExit("no usable text found; check the paths or URLs")
+    stats = ds.save(args.out)
+    print(f"\nwrote {args.out}: {stats['documents']} documents, {stats['conversations']} conversations, "
+          f"{stats['characters']:,} characters (~{stats['estimated_tokens']:,} tokens), "
+          f"{stats['duplicates_removed']} duplicates removed, {stats['skipped']} skipped")
+    print(f"suggested ({stats['suggestion']['preset']}):\n  {stats['suggestion']['command']}")
 
 
 def cmd_info(args) -> None:
@@ -112,18 +147,21 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--seed", type=int, default=1337)
     t.add_argument("--resume", action="store_true", help="continue from the checkpoint in --out")
     t.add_argument("--sample-prompt", default="", help="text used for the sample printed at each eval")
+    _add_device(t)
     t.set_defaults(func=cmd_train)
 
     g = sub.add_parser("generate", help="continue a prompt")
     g.add_argument("--model", default="checkpoints/model")
     g.add_argument("--prompt", default="")
     _add_sampling(g)
+    _add_device(g)
     g.set_defaults(func=cmd_generate)
 
     c = sub.add_parser("chat", help="interactive chat in the terminal")
     c.add_argument("--model", default="checkpoints/model")
     c.add_argument("--system", default="")
     _add_sampling(c)
+    _add_device(c)
     c.set_defaults(func=cmd_chat)
 
     s = sub.add_parser("serve", help="OpenAI-compatible API server (no key needed)")
@@ -131,7 +169,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to allow phones on your Wi-Fi")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--name", default="libra")
+    _add_device(s)
     s.set_defaults(func=cmd_serve)
+
+    d = sub.add_parser("data", help="build a clean training dataset from files, web pages and books")
+    d.add_argument("inputs", nargs="*", help="files or folders: .txt .md .html .json .jsonl .csv "
+                   "(chat exports, ShareGPT, Alpaca and Q/A tables are detected)")
+    d.add_argument("--url", action="append", default=[], help="web page or text file to download (repeatable)")
+    d.add_argument("--gutenberg", action="append", type=int, default=[],
+                   help="Project Gutenberg book number to download (repeatable), e.g. 1342")
+    d.add_argument("--out", default="datasets/mine")
+    d.add_argument("--min-chars", type=int, default=40, help="drop documents shorter than this")
+    d.set_defaults(func=cmd_data)
 
     i = sub.add_parser("info", help="show a checkpoint's size and settings")
     i.add_argument("--model", default="checkpoints/model")
@@ -141,7 +190,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> None:
     args = build_parser().parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except (RuntimeError, FileNotFoundError, ValueError) as exc:
+        raise SystemExit(f"libra: error: {exc}") from None
 
 
 if __name__ == "__main__":

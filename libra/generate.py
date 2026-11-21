@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import backend as B
 from .autograd import no_grad
 from .nn import GPT
 from .tokenizer import EOT, BPETokenizer
@@ -55,14 +56,20 @@ def stream_ids(model: GPT, prompt_ids: list[int], params: SamplingParams, stop_i
     stop = set(stop_ids)
     block = model.config.block_size
     model.eval()
+    cache = model.new_cache()
     with no_grad():
+        pending = ids[-block:]  # tokens not yet in the cache
         for _ in range(params.max_tokens):
-            context = ids[-block:]
-            logits, _ = model(np.array([context], dtype=np.int64))
-            nxt = sample_token(logits.data[0, -1], params, rng, ids)
+            if cache.length + len(pending) > block:
+                # Window is full: keep the most recent half of the context and re-encode it.
+                cache.reset()
+                pending = ids[-max(1, block // 2):]
+            logits = model.infer(np.array([pending], dtype=np.int64), cache)
+            nxt = sample_token(B.to_numpy(logits[0, -1]), params, rng, ids)
             if nxt in stop:
                 return
             ids.append(nxt)
+            pending = [nxt]
             yield nxt
 
 

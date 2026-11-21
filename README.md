@@ -6,14 +6,16 @@ The only dependency is **NumPy**. Everything else is in this repo:
 
 | File | What it is |
 |---|---|
+| `libra/backend.py` | CPU (NumPy) or NVIDIA GPU (CuPy) array backend |
 | `libra/autograd.py` | Reverse-mode automatic differentiation engine (tensors, broadcasting, matmul, softmax, layer norm, GELU, cross-entropy, embeddings, dropout) |
 | `libra/nn.py` | Modules and the transformer: causal multi-head self-attention, MLP, pre-norm residual blocks, tied embeddings |
 | `libra/tokenizer.py` | Byte-level BPE tokenizer trained on your corpus, with chat special tokens |
 | `libra/optim.py` | AdamW, gradient clipping, warmup + cosine learning-rate schedule |
 | `libra/train.py` | Data loading (`.txt`, `.md`, `.jsonl` chats), training loop, validation, checkpoints, resume |
-| `libra/generate.py` | Sampling: temperature, top-k, top-p, repetition penalty, streaming UTF-8 decode |
+| `libra/generate.py` | Fast sampling with a key/value cache: temperature, top-k, top-p, repetition penalty, streaming UTF-8 decode |
+| `libra/dataset.py` | Dataset builder: files, chat exports, web pages and Project Gutenberg books into clean, de-duplicated training data |
 | `libra/server.py` | OpenAI-compatible HTTP API (standard library only), with streaming |
-| `libra/cli.py` | `libra train / generate / chat / serve / info` |
+| `libra/cli.py` | `libra data / train / generate / chat / serve / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -42,6 +44,34 @@ libra generate --model checkpoints/demo --prompt "The library"
 
 The sample data is tiny, so the demo model mostly repeats what it saw. To get a model that writes new text, train it on more data.
 
+## Build a dataset
+
+`libra data` gathers text from many places, cleans it, removes duplicates and tells you what model size and step count fit:
+
+```bash
+libra data my_notes/ chats.jsonl faq.csv \
+  --gutenberg 1342 --gutenberg 84 \
+  --url https://example.com/article.html \
+  --out datasets/mine
+libra train datasets/mine ...   # use the command it suggests
+```
+
+It understands:
+
+| Input | How it's used |
+|---|---|
+| `.txt` `.md` `.rst` | Plain text (Project Gutenberg headers and licences are stripped automatically) |
+| `.html` `.htm` | Page text only, without scripts, menus and footers |
+| `.jsonl` / `.json` with `messages` | Chats (OpenAI format) |
+| ChatGPT export `conversations.json` | Chats, following each conversation's thread |
+| ShareGPT (`conversations` with `from`/`value`) | Chats |
+| Alpaca (`instruction`, `input`, `output`) | Chats |
+| `.csv` / `.tsv` with question/answer (or prompt/response) columns | Chats; any other CSV becomes text |
+| `--gutenberg N` | Downloads public-domain book number N from gutenberg.org |
+| `--url URL` | Downloads a web page or text file |
+
+The output folder holds `text.jsonl`, `chat.jsonl` and `stats.json`, with character counts, an estimated token count and the suggested `libra train` command. Only use text you have the right to use.
+
 ## Training on your own text
 
 Point `libra train` at files or folders:
@@ -65,6 +95,7 @@ libra train my_books/ --out checkpoints/mine --steps 10000 --resume   # keep goi
 | Tiny | `--layers 2 --embd 96 --ctx 64` | ~0.3M | Testing, under 100 KB of text |
 | Small (default) | `--layers 4 --embd 128 --ctx 128` | ~1M | 1–10 MB of text |
 | Medium | `--layers 6 --embd 256 --heads 8 --ctx 256 --vocab 4096` | ~6M | 10 MB+ of text, overnight runs |
+| Large (GPU) | `--layers 8 --embd 384 --heads 6 --ctx 256 --vocab 8192 --device gpu` | ~17M | 50 MB+ of text |
 
 A rule of thumb: you want at least about 20 training tokens per parameter. Keep an eye on the logged `val loss`. If it rises while the training loss keeps falling, the model is memorising: add text or use a smaller model.
 
@@ -73,6 +104,22 @@ A rule of thumb: you want at least about 20 training tokens per parameter. Keep 
 ### Useful flags
 
 `--vocab` tokenizer size · `--ctx` context length · `--layers` `--heads` `--embd` model size · `--batch` batch size · `--steps` training steps · `--lr` peak learning rate · `--dropout` · `--eval-every` · `--resume` · `--sample-prompt` text used for the preview printed at each evaluation.
+
+## GPU (optional)
+
+Training and generation run on an NVIDIA GPU through CuPy, which is an array library, not a model. Install the CuPy build for your CUDA version, then pass `--device gpu`:
+
+```bash
+pip install cupy-cuda12x        # or: pip install -e .[gpu]
+libra train datasets/mine --device gpu --layers 8 --embd 384 --heads 6 --ctx 256 --vocab 8192
+libra serve --model checkpoints/large --device gpu
+```
+
+`--device auto` (the default) uses the GPU when CuPy finds one, otherwise the CPU. Checkpoints are the same on both, so you can train on a GPU and chat on a laptop.
+
+## Generation speed
+
+Generation keeps a key/value cache, so each new token costs one small step instead of re-reading the whole context. On a 4-core CPU with the default model, that is about **1,500 tokens/s versus 61 without the cache**. When the context window fills, the most recent half is kept and re-encoded, so replies can be longer than `--ctx`.
 
 ## Run it as a local API (no key)
 

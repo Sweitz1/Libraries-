@@ -10,14 +10,18 @@ import math
 
 import numpy as np
 
+from . import backend as B
+
 _grad_enabled = True
 _rng = np.random.default_rng()
 
 
 def seed(value: int) -> None:
-    """Seed the generator used for dropout and parameter initialisation."""
+    """Seed the generators used for dropout and parameter initialisation."""
     global _rng
     _rng = np.random.default_rng(value)
+    if B.on_gpu():
+        B.xp.random.seed(value)
 
 
 def rng() -> np.random.Generator:
@@ -36,10 +40,14 @@ def no_grad():
         _grad_enabled = prev
 
 
-def _as_array(x) -> np.ndarray:
-    if isinstance(x, np.ndarray):
-        return x if np.issubdtype(x.dtype, np.floating) else x.astype(np.float32)
-    return np.asarray(x, dtype=np.float32)
+def _as_array(x):
+    """Return ``x`` as a floating-point array on the active device."""
+    if isinstance(x, B.xp.ndarray) and np.issubdtype(x.dtype, np.floating):
+        return x
+    arr = B.to_numpy(x) if not isinstance(x, (int, float, list, tuple)) else np.asarray(x)
+    if not np.issubdtype(arr.dtype, np.floating):
+        arr = arr.astype(np.float32)
+    return B.asarray(arr)
 
 
 def _unbroadcast(grad: np.ndarray, shape: tuple) -> np.ndarray:
@@ -84,7 +92,7 @@ class Tensor:
         return float(self.data)
 
     def numpy(self) -> np.ndarray:
-        return self.data
+        return B.to_numpy(self.data)
 
     def __repr__(self) -> str:
         return f"Tensor(shape={self.shape}, requires_grad={self.requires_grad})"
@@ -119,7 +127,7 @@ class Tensor:
             for parent in node._prev:
                 if id(parent) not in seen:
                     stack.append((parent, False))
-        self.grad = np.ones_like(self.data) if grad is None else _as_array(grad)
+        self.grad = B.xp.ones_like(self.data) if grad is None else _as_array(grad)
         for node in reversed(order):
             if node._backward is not None:
                 node._backward()
@@ -189,9 +197,9 @@ class Tensor:
         def bw():
             g = out.grad
             if self.requires_grad:
-                self._acc(_unbroadcast(g @ np.swapaxes(other.data, -1, -2), self.shape))
+                self._acc(_unbroadcast(g @ B.xp.swapaxes(other.data, -1, -2), self.shape))
             if other.requires_grad:
-                other._acc(_unbroadcast(np.swapaxes(self.data, -1, -2) @ g, other.shape))
+                other._acc(_unbroadcast(B.xp.swapaxes(self.data, -1, -2) @ g, other.shape))
 
         out = Tensor._make(self.data @ other.data, (self, other), bw)
         return out
@@ -201,8 +209,8 @@ class Tensor:
         def bw():
             g = out.grad
             if axis is not None and not keepdims:
-                g = np.expand_dims(g, axis)
-            self._acc(np.broadcast_to(g, self.shape).copy())
+                g = B.xp.expand_dims(g, axis)
+            self._acc(B.xp.broadcast_to(g, self.shape).copy())
 
         out = Tensor._make(self.data.sum(axis=axis, keepdims=keepdims), (self,), bw)
         return out
@@ -243,11 +251,11 @@ class Tensor:
 
     def __getitem__(self, idx) -> "Tensor":
         def bw():
-            g = np.zeros_like(self.data)
+            g = B.xp.zeros_like(self.data)
             if _is_basic_index(idx):
                 g[idx] += out.grad
             else:
-                np.add.at(g, idx, out.grad)
+                B.scatter_add(g, idx, out.grad)
             self._acc(g)
 
         out = Tensor._make(self.data[idx], (self,), bw)
@@ -255,7 +263,7 @@ class Tensor:
 
     # ------------------------------------------------------------ elementwise
     def exp(self) -> "Tensor":
-        y = np.exp(self.data)
+        y = B.xp.exp(self.data)
 
         def bw():
             self._acc(out.grad * y)
@@ -267,11 +275,11 @@ class Tensor:
         def bw():
             self._acc(out.grad / self.data)
 
-        out = Tensor._make(np.log(self.data), (self,), bw)
+        out = Tensor._make(B.xp.log(self.data), (self,), bw)
         return out
 
     def tanh(self) -> "Tensor":
-        y = np.tanh(self.data)
+        y = B.xp.tanh(self.data)
 
         def bw():
             self._acc(out.grad * (1 - y * y))
@@ -283,7 +291,7 @@ class Tensor:
         def bw():
             self._acc(out.grad * (self.data > 0))
 
-        out = Tensor._make(np.maximum(self.data, 0), (self,), bw)
+        out = Tensor._make(B.xp.maximum(self.data, 0), (self,), bw)
         return out
 
 
@@ -302,7 +310,7 @@ _GELU_C = math.sqrt(2.0 / math.pi)
 def gelu(x: Tensor) -> Tensor:
     """GELU activation (tanh approximation)."""
     xd = x.data
-    t = np.tanh(_GELU_C * (xd + 0.044715 * xd**3))
+    t = B.xp.tanh(_GELU_C * (xd + 0.044715 * xd**3))
 
     def bw():
         dinner = _GELU_C * (1 + 3 * 0.044715 * xd**2)
@@ -312,11 +320,11 @@ def gelu(x: Tensor) -> Tensor:
     return out
 
 
-def softmax(x: Tensor, axis: int = -1, mask: np.ndarray | None = None) -> Tensor:
+def softmax(x: Tensor, axis: int = -1, mask=None) -> Tensor:
     """Softmax along ``axis``. Positions where ``mask`` is False get probability 0."""
-    z = x.data if mask is None else np.where(mask, x.data, -np.inf)
+    z = x.data if mask is None else B.xp.where(mask, x.data, -np.inf)
     z = z - z.max(axis=axis, keepdims=True)
-    e = np.exp(z)
+    e = B.xp.exp(z)
     y = e / e.sum(axis=axis, keepdims=True)
 
     def bw():
@@ -327,26 +335,28 @@ def softmax(x: Tensor, axis: int = -1, mask: np.ndarray | None = None) -> Tensor
     return out
 
 
-def cross_entropy(logits: Tensor, targets: np.ndarray) -> Tensor:
+def cross_entropy(logits: Tensor, targets) -> Tensor:
     """Mean cross-entropy of ``logits`` (N, V) against integer ``targets`` (N,)."""
+    xp = B.xp
+    targets = B.asarray(targets)
     z = logits.data - logits.data.max(axis=1, keepdims=True)
-    logp = z - np.log(np.exp(z).sum(axis=1, keepdims=True))
-    rows = np.arange(len(targets))
+    logp = z - xp.log(xp.exp(z).sum(axis=1, keepdims=True))
+    rows = xp.arange(len(targets))
     loss = -logp[rows, targets].mean()
 
     def bw():
-        p = np.exp(logp)
+        p = xp.exp(logp)
         p[rows, targets] -= 1
         logits._acc(p * (out.grad / len(targets)))
 
-    out = Tensor._make(np.asarray(loss, dtype=logits.dtype), (logits,), bw)
+    out = Tensor._make(loss.astype(logits.dtype), (logits,), bw)
     return out
 
 
 def layer_norm(x: Tensor, weight: Tensor, bias: Tensor, eps: float = 1e-5) -> Tensor:
     xd = x.data
     mu = xd.mean(axis=-1, keepdims=True)
-    rstd = 1.0 / np.sqrt(xd.var(axis=-1, keepdims=True) + eps)
+    rstd = 1.0 / B.xp.sqrt(xd.var(axis=-1, keepdims=True) + eps)
     xhat = (xd - mu) * rstd
     c = xd.shape[-1]
 
@@ -371,12 +381,13 @@ def layer_norm(x: Tensor, weight: Tensor, bias: Tensor, eps: float = 1e-5) -> Te
     return out
 
 
-def embedding(weight: Tensor, idx: np.ndarray) -> Tensor:
+def embedding(weight: Tensor, idx) -> Tensor:
     """Look up rows of ``weight`` for integer indices ``idx``."""
+    idx = B.asarray(idx)
 
     def bw():
-        g = np.zeros_like(weight.data)
-        np.add.at(g, idx.reshape(-1), out.grad.reshape(-1, weight.shape[1]))
+        g = B.xp.zeros_like(weight.data)
+        B.scatter_add(g, idx.reshape(-1), out.grad.reshape(-1, weight.shape[1]))
         weight._acc(g)
 
     out = Tensor._make(weight.data[idx], (weight,), bw)
@@ -386,5 +397,6 @@ def embedding(weight: Tensor, idx: np.ndarray) -> Tensor:
 def dropout(x: Tensor, p: float, training: bool) -> Tensor:
     if not training or p <= 0:
         return x
-    keep = (_rng.random(x.shape) >= p).astype(x.dtype) / (1.0 - p)
+    noise = _rng.random(x.shape, dtype=np.float32) if not B.on_gpu() else B.xp.random.random(x.shape, dtype=np.float32)
+    keep = (noise >= p).astype(x.dtype) / (1.0 - p)
     return x * Tensor(keep)

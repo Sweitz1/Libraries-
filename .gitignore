@@ -78,3 +78,4 @@ dist/
 
 # Training output
 checkpoints/
+datasets/
