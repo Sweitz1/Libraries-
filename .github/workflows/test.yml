@@ -67,3 +67,23 @@ jobs:
         run: mvn -B verify
       - if: failure()
         run: cat "$RUNNER_TEMP/serve.log"
+
+  # Security audit with Stingward (pinned): dependencies against OSV/CISA KEV/EPSS, secrets, code,
+  # agent and MCP settings, and every Claude Code skill. Must stay free of high and critical findings.
+  stingward:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install stingward==0.1.11
+      - name: Audit the project
+        run: stingward . --lang en --no-color --fail-on high --markdown "$RUNNER_TEMP/stingward.md"
+      - name: Audit every skill and the plugins
+        run: |
+          for d in .claude/skills/* templates/claude-skill plugins; do
+            stingward skill "$d" --lang en --no-color --fail-on medium --offline || exit 1
+          done
+      - if: always()
+        run: cat "$RUNNER_TEMP/stingward.md" >> "$GITHUB_STEP_SUMMARY" || true
