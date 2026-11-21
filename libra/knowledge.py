@@ -488,6 +488,11 @@ class Workspace:
         if found:
             best = found[0][0]
             found = [f for f in found if f[0] >= 0.5 * best]
+            # The best sentence must cover at least half of the question's key words, so one shared
+            # word ("match" in "who won the football match?") doesn't count as an answer.
+            need = max(1, -(-len(q) // 2))
+            if len(q & set(terms(found[0][1]))) < need:
+                return []
         return found
 
     def _ambiguous(self, question: str, hits) -> list:

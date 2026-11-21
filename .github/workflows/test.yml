@@ -32,3 +32,5 @@ jobs:
           libra translate add examples/phrasebook_en_es.tsv --src en --tgt es
           libra translate align --src en --tgt es
           libra translate text "Where is the hotel?" --to es
+      - name: Installer (test mode, no root or systemd)
+        run: ./deploy/install-debian.sh --root "$RUNNER_TEMP/libra-root" --port 8799

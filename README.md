@@ -22,11 +22,23 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/openapi.py`, `libra/yamlish.py` | OpenAPI/Swagger importer and caller; a small YAML reader for specs |
 | `libra/trust.py` | Risk levels, allow/ask/deny rules, confirmation prompts, audit log |
 | `libra/translate.py`, `libra/lang.py` | Translation memory, IBM Model 1 alignment, adaptation, glossing, pivoting; language detection and romanization |
+| `libra/webui/` | The phone/browser app served at `/` (no external files; works offline on your network) |
+| `deploy/` | Debian installer (systemd service, nightly training timer, token), Caddy HTTPS example, setup guide |
 | `libra/auto.py` | Unattended collect → filter → train → gate → report runs, with locking, limits, rollback and scheduling |
 | `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
 | `libra/cli.py` | `libra data / train / auto / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
+
+## Run it on a Debian server and use it from your phone
+
+```bash
+sudo ./deploy/install-debian.sh
+```
+
+This installs Libra as a service (it starts at boot, runs nightly training, and requires a token) and prints a link to open on your phone. The app has Chat (your files or the model), Translate, Skills and Training tabs, and can be added to the home screen. **[deploy/README.md](deploy/README.md)** covers adding your files, switching on training, and safe access away from home with Tailscale or HTTPS.
+
+![The Libra app on a phone](docs/phone-chat.png)
 
 ## Install
 
@@ -498,7 +510,7 @@ Nexus Agent can talk to any OpenAI-compatible endpoint. Start `libra serve --hos
 - **Model:** `libra`
 - **API key:** leave empty, or type anything
 
-Only use `--host 0.0.0.0` on a network you trust. The server has no authentication, and anyone who can reach it can run its skills, including the web fetchers. Those still refuse LAN addresses unless you started it with `--allow-private`.
+With `--host 0.0.0.0`, Libra creates an access token (saved in `~/.libra/server-token`) and requires it as `Authorization: Bearer <token>`, which is the API key in OpenAI apps. Wrong tokens are rate-limited. Use `--token`, `--token-file`, or `--no-auth` for trusted local use only. For access from outside your home, see [deploy/README.md](deploy/README.md): use Tailscale or an HTTPS proxy, never a plain open port.
 
 ## Use it as a library
 

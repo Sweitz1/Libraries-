@@ -244,13 +244,53 @@ def cmd_serve(args) -> None:
     print(f"device: {B.use(args.device)}")
     ws = _workspace(args)
     model = tok = None
-    if ws is None or os.path.exists(os.path.join(args.model, "model.npz")):
+    if os.path.exists(os.path.join(args.model, "model.npz")):
         model, tok, _ = checkpoint.load(args.model)
+    elif ws is None:
+        print(f"note: no trained model in {args.model}; the app works for files, translation and skills, "
+              "and chat with the model starts working once one is trained")
     skills = _registry(args, interactive=False)  # "ask" skills are refused over HTTP; use libra trust allow
     if ws is not None:
         print(f"grounded: chat answers come from {len(ws.sources)} file(s) in {ws.path}")
-    serve(Engine(model, tok, name=args.name, skills=skills, auto_skills=args.auto_skills, workspace=ws),
-          args.host, args.port)
+    token = _server_token(args)
+    auto_config = os.path.abspath(args.auto_config) if args.auto_config else None
+    if auto_config and not os.path.exists(auto_config):
+        raise SystemExit(f"no auto config at {auto_config} (create one with: libra auto init {args.auto_config})")
+    engine = Engine(model, tok, name=args.name, skills=skills, auto_skills=args.auto_skills, workspace=ws,
+                    token=token, auto_config=auto_config)
+    engine.watch_model(os.path.abspath(args.model))  # new training results are picked up without a restart
+    serve(engine, args.host, args.port)
+
+
+def _server_token(args) -> str | None:
+    """The access token: --token, --token-file, LIBRA_TOKEN, or (when reachable from other devices) a saved one."""
+    import secrets
+
+    from . import home
+
+    if args.no_auth:
+        if args.host not in ("127.0.0.1", "localhost", "::1"):
+            print("WARNING: --no-auth on a network address: anyone who can reach this port can use it")
+        return None
+    if args.token:
+        return args.token
+    path = args.token_file or (home.path("server-token") if args.host not in ("127.0.0.1", "localhost", "::1")
+                               else None)
+    if os.environ.get("LIBRA_TOKEN"):
+        return os.environ["LIBRA_TOKEN"]
+    if not path:
+        return None  # local-only server: no token unless asked for
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            token = f.read().strip()
+        if token:
+            return token
+    token = secrets.token_urlsafe(24)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    print(f"created an access token in {path}")
+    return token
 
 
 def _registry(args, interactive: bool = True):
@@ -659,9 +699,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workspace_flags(c)
     c.set_defaults(func=cmd_chat)
 
-    s = sub.add_parser("serve", help="OpenAI-compatible API server (no key needed)")
+    s = sub.add_parser("serve", help="phone/browser app plus OpenAI-compatible API")
     s.add_argument("--model", default="checkpoints/model")
     s.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to allow phones on your Wi-Fi")
+    s.add_argument("--token", help="access token (default for network hosts: one saved in ~/.libra/server-token)")
+    s.add_argument("--token-file", help="read the access token from this file (created if missing)")
+    s.add_argument("--no-auth", action="store_true", help="no token at all (only for trusted, local use)")
+    s.add_argument("--auto-config", help="libra auto config, so the app can show and start training runs")
     s.add_argument("--port", type=int, default=8000)
     s.add_argument("--name", default="libra")
     _add_device(s)

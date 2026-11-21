@@ -1,0 +1,18 @@
+# Public HTTPS access through Caddy (https://caddyserver.com), which gets and renews the certificate for you.
+#
+# 1. Point a domain's DNS (A/AAAA record) at this machine and forward ports 80 and 443 to it on your router.
+# 2. Install Libra listening on this machine only:   sudo ./deploy/install-debian.sh --local-only
+# 3. Install Caddy (Debian):                         sudo apt install caddy
+# 4. Replace libra.example.com below, copy this file to /etc/caddy/Caddyfile, then: sudo systemctl reload caddy
+#
+# The Libra token still protects everything. Caddy adds HTTPS, so the token never crosses the internet in plain text.
+
+libra.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000 {
+		flush_interval -1    # stream replies as they're generated
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+	}
+}

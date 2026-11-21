@@ -34,6 +34,7 @@ import numpy as np
 
 TEMPLATE = {
     "name": "my-model",
+    "enabled": True,
     "sources": [
         {"crawl": "https://example.com/docs/", "max_pages": 100, "depth": 2, "include": "", "exclude": ""},
         {"feed": "https://example.com/blog/feed.xml", "max_items": 20},
@@ -386,6 +387,9 @@ def _dir_mb(path: str) -> float:
 
 def run(config_path: str, dry_run: bool = False, log=print) -> Report:
     cfg = load_config(config_path)
+    if not cfg.get("enabled", True) and not dry_run:
+        return Report(started=_dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                      decision=f'training is switched off in {config_path}: choose your sources, then set "enabled": true')
     dataset, model_dir = cfg["dataset"], cfg["model"]
     train_dir, holdout_path = os.path.join(dataset, "train"), os.path.join(dataset, "holdout.jsonl")
     os.makedirs(train_dir, exist_ok=True)

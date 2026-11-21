@@ -2,12 +2,19 @@
 
 Endpoints: GET /health, GET /v1/models, POST /v1/chat/completions,
 POST /v1/completions, GET /v1/skills, POST /v1/skills/<name>,
-POST /v1/workspace/ask|correct|rule. Streaming uses server-sent events like the OpenAI API,
-so any OpenAI-compatible client (including Nexus Agent) can connect.
+POST /v1/workspace/ask|correct|rule, POST /v1/translate, GET /v1/info, GET /v1/auto/status,
+POST /v1/auto/run, and the phone/browser app at ``/``. Streaming uses server-sent events
+like the OpenAI API, so any OpenAI-compatible client (including Nexus Agent) can connect.
+
+With a token set, every endpoint except ``/health`` and the app's static files needs
+``Authorization: Bearer <token>`` (the token doubles as the "API key" in OpenAI apps).
+Repeated wrong tokens from one address are locked out for a while.
 """
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import threading
 import time
 import uuid
@@ -17,9 +24,26 @@ from . import chat
 from .generate import SamplingParams, stream_text
 
 
+WEBUI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui")
+STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+          "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
+          "/icon.svg": ("icon.svg", "image/svg+xml")}
+OPEN_PATHS = {"/health", *STATIC}
+MAX_BODY = 2_000_000
+MAX_FAILS, FAIL_WINDOW = 10, 600
+
+
 class Engine:
     def __init__(self, model, tokenizer, name: str = "libra", skills=None, auto_skills: bool = False,
-                 workspace=None):
+                 workspace=None, token: str | None = None, auto_config: str | None = None):
+        self.token = token or None
+        self.auto_config = auto_config
+        self.model_dir: str | None = None  # set to reload the model when a new one is trained
+        self._model_mtime = 0.0
+        self.auto_thread: threading.Thread | None = None
+        self.auto_last: dict = {}
+        self._fails: dict[str, list] = {}
+        self._fails_lock = threading.Lock()
         self.workspace = workspace
         self.model = model
         self.tokenizer = tokenizer
@@ -28,9 +52,36 @@ class Engine:
         self.auto_skills = auto_skills
         self.lock = threading.Lock()
 
-    def route(self, messages: list[dict]):
-        """Run a skill if auto-skills is on and the last user message asks for one."""
-        if not (self.auto_skills and self.skills and messages and messages[-1].get("role") == "user"):
+    def watch_model(self, model_dir: str) -> None:
+        """Reload the model whenever ``model_dir/model.npz`` changes (e.g. after a nightly training run)."""
+        self.model_dir = model_dir
+        path = os.path.join(model_dir, "model.npz")
+        self._model_mtime = os.path.getmtime(path) if self.model is not None and os.path.exists(path) else 0.0
+
+    def maybe_reload(self) -> None:
+        if not self.model_dir:
+            return
+        path = os.path.join(self.model_dir, "model.npz")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return
+        if mtime == self._model_mtime:
+            return
+        from . import checkpoint
+
+        with self.lock:
+            if mtime != self._model_mtime:
+                try:
+                    self.model, self.tokenizer, _ = checkpoint.load(self.model_dir)
+                    self._model_mtime = mtime
+                    print(f"[server] loaded the updated model from {self.model_dir}")
+                except Exception as exc:  # half-written or broken: keep the old one, try again next time
+                    print(f"[server] could not load {self.model_dir}: {exc}")
+
+    def route(self, messages: list[dict], requested: bool = False):
+        """Run a skill if auto-skills is on (or the request asks for it) and the last message wants one."""
+        if not ((self.auto_skills or requested) and self.skills and messages and messages[-1].get("role") == "user"):
             return None
         call = self.skills.route(chat._content(messages[-1]))
         return self.skills.run(*call) if call else None
@@ -97,6 +148,89 @@ def make_handler(engine: Engine):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Headers", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+
+        def _client(self) -> str:
+            return self.client_address[0]
+
+        def _authorized(self, path: str) -> bool:
+            """True if the request may go on; otherwise an error has been sent."""
+            if engine.token is None or path in OPEN_PATHS:
+                return True
+            ip = self._client()
+            now = time.time()
+            with engine._fails_lock:
+                fails = [t for t in engine._fails.get(ip, []) if now - t < FAIL_WINDOW]
+                engine._fails[ip] = fails
+                if len(fails) >= MAX_FAILS:
+                    self._error(429, "too many wrong tokens from this address; try again in a few minutes")
+                    return False
+            auth = self.headers.get("Authorization", "")
+            given = auth[7:].strip() if auth.lower().startswith("bearer ") else self.headers.get("X-Libra-Token", "")
+            if given and hmac.compare_digest(given.encode(), engine.token.encode()):
+                return True
+            with engine._fails_lock:
+                engine._fails.setdefault(ip, []).append(now)
+            self._error(401, "missing or wrong token (send Authorization: Bearer <token>)")
+            return False
+
+        def _static(self, path: str) -> None:
+            name, ctype = STATIC[path]
+            with open(os.path.join(WEBUI, name), "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                             "script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _info(self) -> dict:
+            from . import home
+
+            engine.maybe_reload()
+            info = {"name": engine.name, "model": engine.model is not None, "workspace": None, "auto": None,
+                    "skills": len(engine.skills.list()) if engine.skills else 0,
+                    "catalog": engine.skills.catalog.count() if engine.skills and engine.skills.catalog else 0,
+                    "translate": os.path.exists(home.path("translate.db")), "auth": engine.token is not None}
+            if engine.model is not None:
+                info["model_parameters"] = engine.model.num_parameters()
+            if engine.workspace is not None:
+                info["workspace"] = {"files": len(engine.workspace.sources), "rules": len(engine.workspace.rules),
+                                     "corrections": len(engine.workspace.corrections)}
+            if engine.auto_config:
+                info["auto"] = {"config": os.path.basename(engine.auto_config),
+                                "running": bool(engine.auto_thread and engine.auto_thread.is_alive())}
+            return info
+
+        def _auto_run(self, dry_run: bool) -> None:
+            if not engine.auto_config:
+                self._error(404, "server was started without --auto-config")
+                return
+            if engine.auto_thread and engine.auto_thread.is_alive():
+                self._error(409, "a training run is already in progress")
+                return
+
+            def work():
+                from . import auto
+
+                try:
+                    report = auto.run(engine.auto_config, dry_run=dry_run, log=None)
+                    engine.auto_last = {"ok": True, "decision": report.decision,
+                                        "report": report.markdown(auto.load_config(engine.auto_config))}
+                except Exception as exc:  # reported to the app instead of killing the server
+                    engine.auto_last = {"ok": False, "decision": f"run failed: {exc}", "report": ""}
+
+            engine.auto_last = {"ok": None, "decision": "running…", "report": ""}
+            engine.auto_thread = threading.Thread(target=work, daemon=True)
+            engine.auto_thread.start()
+            self._json(202, {"started": True, "dry_run": dry_run})
 
         def _json(self, status: int, obj) -> None:
             data = json.dumps(obj).encode("utf-8")
@@ -117,9 +251,27 @@ def make_handler(engine: Engine):
             self.end_headers()
 
         def do_GET(self):
-            path = self.path.split("?")[0].rstrip("/")
-            if path in ("", "/health"):
+            path = self.path.split("?")[0].rstrip("/") or "/"
+            if not self._authorized(path):
+                return
+            if path in STATIC:
+                self._static(path)
+            elif path == "/health":
                 self._json(200, {"status": "ok", "model": engine.name})
+            elif path == "/v1/info":
+                self._json(200, self._info())
+            elif path == "/v1/auto/status":
+                if not engine.auto_config:
+                    self._error(404, "server was started without --auto-config")
+                    return
+                from . import auto
+
+                try:
+                    text = auto.status(engine.auto_config)
+                except Exception as exc:
+                    text = f"(could not read status: {exc})"
+                running = bool(engine.auto_thread and engine.auto_thread.is_alive())
+                self._json(200, {"running": running, "status": text, "last": engine.auto_last})
             elif path == "/v1/skills":
                 from urllib.parse import parse_qs, urlsplit
 
@@ -141,8 +293,14 @@ def make_handler(engine: Engine):
 
         def do_POST(self):
             path = self.path.split("?")[0].rstrip("/")
+            if not self._authorized(path):
+                return
             try:
                 length = int(self.headers.get("Content-Length") or 0)
+                if length > MAX_BODY:
+                    self._error(413, f"request body over {MAX_BODY // 1_000_000} MB")
+                    self.close_connection = True
+                    return
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
                     raise ValueError("body must be a JSON object")
@@ -151,6 +309,22 @@ def make_handler(engine: Engine):
                 self._error(400, f"bad request: {exc}")
                 return
 
+            if path == "/v1/translate":
+                from .translate import Translator
+
+                try:
+                    result = Translator().translate(str(body["text"]), str(body["to"]), str(body.get("source") or "auto"))
+                except KeyError as exc:
+                    self._error(400, f"missing field {exc}")
+                    return
+                except ValueError as exc:
+                    self._error(400, str(exc))
+                    return
+                self._json(200, dict(result.to_dict(), display=result.describe()))
+                return
+            if path == "/v1/auto/run":
+                self._auto_run(bool(body.get("dry_run")))
+                return
             if path in ("/v1/workspace/ask", "/v1/workspace/correct", "/v1/workspace/rule"):
                 ws = engine.workspace
                 if ws is None:
@@ -183,15 +357,17 @@ def make_handler(engine: Engine):
                 blocked = not result.ok and ("needs your approval" in result.text or "is blocked" in result.text)
                 self._json(403 if blocked else 200, result.to_dict())
             elif path == "/v1/chat/completions":
+                engine.maybe_reload()
                 messages = body.get("messages")
                 if not isinstance(messages, list) or not messages:
                     self._error(400, "'messages' must be a non-empty list")
                     return
-                result = engine.route(messages)
+                result = engine.route(messages, bool(body.get("libra_auto_skills")))
                 if result is not None:
                     self._respond_text(body, result.text, result.skill)
                     return
-                if engine.workspace is not None:
+                use_model = body.get("libra_mode") == "model" and engine.model is not None
+                if engine.workspace is not None and not use_model:
                     answer = engine.workspace.ask_chat(messages)
                     self._respond_text(body, answer.text, "workspace", extra={"libra_grounding": answer.to_dict()})
                     return
@@ -201,6 +377,7 @@ def make_handler(engine: Engine):
                 prompt = chat.render(messages, add_generation_prompt=True)
                 self._respond(body, params, prompt, chat_mode=True)
             elif path == "/v1/completions":
+                engine.maybe_reload()
                 if engine.model is None:
                     self._error(503, "no model loaded (grounded workspace mode only answers chat requests)")
                     return
@@ -295,9 +472,37 @@ def make_server(engine: Engine, host: str = "127.0.0.1", port: int = 8000) -> Th
     return server
 
 
+def lan_addresses() -> list[str]:
+    """This machine's addresses on the local network (for printing phone URLs)."""
+    import socket
+
+    found = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("10.255.255.255", 1))  # no packet is sent; this just picks the outgoing interface
+            found.append(sock.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith("127.") and ip not in found:
+                found.append(ip)
+    except OSError:
+        pass
+    return found
+
+
 def serve(engine: Engine, host: str = "127.0.0.1", port: int = 8000) -> None:
     server = make_server(engine, host, port)
-    print(f"libra: serving '{engine.name}' on http://{host}:{server.server_address[1]}/v1 (no API key required)")
+    port = server.server_address[1]
+    hosts = lan_addresses() if host in ("0.0.0.0", "") else [host]
+    frag = f"#token={engine.token}" if engine.token else ""
+    print(f"libra: serving '{engine.name}' on {host}:{port}")
+    for h in hosts or [host]:
+        print(f"  app:  http://{h}:{port}/{frag}")
+    print(f"  API:  http://{(hosts or [host])[0]}:{port}/v1" + (" (API key: the token)" if engine.token else
+                                                             " (no token: only use on this machine)"))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
