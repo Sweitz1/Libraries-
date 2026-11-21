@@ -52,7 +52,7 @@ class FakeREST(BaseHTTPRequestHandler):
         self._reply(200, {"id": str(len(FakeREST.posts))})
 
 
-def message(mid, content, author="111", guild=True, mentions=(), bot=False, channel="c1"):
+def message(mid, content, author="111", guild=True, mentions=(), bot=False, channel="5001"):
     d = {"id": mid, "channel_id": channel, "content": content, "author": {"id": author, "username": "u", "bot": bot},
          "mentions": [{"id": m} for m in mentions]}
     if guild:
@@ -185,7 +185,7 @@ class DiscordTest(unittest.TestCase):
         parts = split_message(("word " * 300 + "\n\n") * 3)
         self.assertTrue(all(len(p) <= 2000 for p in parts))
         self.assertEqual(" ".join(parts).split(), (("word " * 300) * 3).split())
-        bot = Bot("t", None, config={"channels": ["c1"], "prefix": "!"}, log=None)
+        bot = Bot("t", None, config={"channels": ["5001"], "prefix": "!"}, log=None)
         bot.user_id = BOT_ID
         self.assertEqual(bot.addressed(message("x", f"<@!{BOT_ID}> hi", mentions=[BOT_ID])["d"]), "hi")
         self.assertIsNone(bot.addressed(message("x", "!help", channel="other")["d"]))  # not an allowed channel
@@ -199,3 +199,150 @@ class DiscordTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakeChannels(BaseHTTPRequestHandler):
+    """A fake Discord REST API that keeps messages and reactions, for the Discord skills."""
+    messages: dict = {}   # channel -> [message, newest last]
+    requests: list = []
+
+    def log_message(self, *a):
+        pass
+
+    def _reply(self, status, obj=None):
+        data = json.dumps(obj).encode() if obj is not None else b""
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _find(self, channel, mid):
+        return next((m for m in FakeChannels.messages.get(channel, []) if m["id"] == mid), None)
+
+    def do_GET(self):
+        assert self.headers["Authorization"] == "Bot test-token"
+        FakeChannels.requests.append(("GET", self.path))
+        parts = self.path.split("?")[0].split("/")
+        if self.path.endswith("/users/@me"):
+            return self._reply(200, {"id": BOT_ID, "username": "libra-test"})
+        if len(parts) == 6 and parts[-1] == "messages":
+            return self._reply(200, list(reversed(FakeChannels.messages.get(parts[-2], []))))
+        if len(parts) == 7 and parts[-2] == "messages":
+            m = self._find(parts[-3], parts[-1])
+            return self._reply(200, m) if m else self._reply(404, {"message": "Unknown Message"})
+        self._reply(404, {"message": "Unknown"})
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+        FakeChannels.requests.append(("POST", self.path))
+        channel = self.path.split("/")[-2]
+        msgs = FakeChannels.messages.setdefault(channel, [])
+        m = {"id": str(9000 + sum(len(v) for v in FakeChannels.messages.values())), "content": body["content"],
+             "author": {"id": BOT_ID, "username": "libra-test"}, "timestamp": "2026-11-21T10:00:00",
+             "allowed_mentions": body.get("allowed_mentions")}
+        msgs.append(m)
+        self._reply(200, m)
+
+    def do_PUT(self):
+        from urllib.parse import unquote
+
+        FakeChannels.requests.append(("PUT", self.path))
+        parts = self.path.split("/")  # /api/v10/channels/C/messages/M/reactions/E/@me
+        m = self._find(parts[4], parts[6])
+        if m is None:
+            return self._reply(404, {"message": "Unknown Message"})
+        m.setdefault("reactions", []).append({"emoji": {"name": unquote(parts[8]), "id": None}, "me": True, "count": 1})
+        self._reply(204)
+
+
+class DiscordSkillsTest(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+
+        from libra import discord
+
+        FakeChannels.messages = {"5001": [
+            {"id": "1", "content": "the release is ready", "author": {"id": "111", "username": "ana"},
+             "timestamp": "2026-11-21T09:00:00"},
+            {"id": "2", "content": "", "author": {"id": "222", "username": "bo"}, "timestamp": "2026-11-21T09:05:00"}]}
+        FakeChannels.requests = []
+        self.tmp = tempfile.TemporaryDirectory()
+        self.patches = [mock.patch.dict(os.environ, {"LIBRA_HOME": self.tmp.name, "DISCORD_TOKEN": "test-token"})]
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeChannels)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.patches.append(mock.patch.object(discord, "API", f"http://127.0.0.1:{self.srv.server_address[1]}/api/v10"))
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.tmp.cleanup()
+
+    def registry(self, allow=()):
+        from libra.skills import default_registry
+        from libra.trust import Policy
+
+        return default_registry(log=None, load_default_dir=False, catalog=None,
+                                policy=Policy({"rules": {s: "allow" for s in allow}}, save=False))
+
+    def test_only_with_a_bot_token(self):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"DISCORD_TOKEN": ""}):
+            self.assertNotIn("discord_post", self.registry())
+        reg = self.registry()
+        self.assertEqual([reg.get(s).risk for s in ("discord_history", "discord_post", "discord_react")],
+                         ["read", "write", "write"])
+        self.assertTrue(reg.get("discord_history").untrusted_output)  # other people wrote it
+
+    def test_read_post_react_and_check_the_effect(self):
+        reg = self.registry(allow=["discord_post", "discord_react"])
+        r = reg.run("discord_history", {"channel": "5001"})
+        self.assertEqual(r.text.splitlines()[0], "[2026-11-21 09:00] ana: the release is ready")  # oldest first
+        self.assertIn("Message Content intent", r.text)  # an empty message says why
+
+        posted = reg.run("discord_post", {"channel": "5002", "text": "hello <@everyone>"})
+        self.assertTrue(posted.ok)
+        sent = FakeChannels.messages["5002"][0]
+        self.assertEqual(sent["allowed_mentions"], {"parse": []})  # never pings anyone
+        skill = reg.get("discord_post")
+        self.assertTrue(skill.verify({"channel": "5002", "text": "hello <@everyone>"}, posted))
+        sent["content"] = "edited by someone"
+        self.assertFalse(skill.verify({"channel": "5002", "text": "hello <@everyone>"}, posted))
+
+        self.assertTrue(reg.run("discord_react", {"channel": "5001", "message": "1", "emoji": "👍"}).ok)
+        self.assertTrue(reg.get("discord_react").verify({"channel": "5001", "message": "1", "emoji": "👍"}, None))
+        self.assertFalse(reg.get("discord_react").verify({"channel": "5001", "message": "1", "emoji": "🎉"}, None))
+
+    def test_ids_and_emoji_cannot_change_the_api_path(self):
+        reg = self.registry(allow=["discord_post", "discord_react"])
+        for args in ({"channel": "../../users/@me", "text": "x"}, {"channel": "5001/messages", "text": "x"}):
+            self.assertFalse(reg.run("discord_post", args).ok)
+        self.assertFalse(reg.run("discord_react", {"channel": "5001", "message": "1", "emoji": "../x"}).ok)
+        self.assertFalse(reg.run("discord_history", {"channel": "5001?limit=100&x"}).ok)
+        self.assertEqual(FakeChannels.requests, [])  # nothing was sent
+
+    def test_channel_text_cannot_post_by_itself_and_a_crash_is_reconciled(self):
+        from libra import jobs
+
+        reg = self.registry(allow=["discord_post"])  # even with posting allowed
+        goal = "read discord channel 5001 then post it to discord channel 5002"
+        job = jobs.run(jobs.create(goal, reg)["id"], reg, retry_delay=0)
+        self.assertEqual((job["status"], job["waiting"]["kind"]), ("waiting", "untrusted_input"))
+        self.assertNotIn("5002", FakeChannels.messages)
+        jobs.approve(job["id"])
+        job = jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual((job["status"], job["result"]["effects"][0]["status"]), ("done", "passed"))
+        self.assertEqual(len(FakeChannels.messages["5002"]), 1)
+
+        # the runner died during the post, after Discord got it: reconcile sees it, so it isn't posted twice
+        j = jobs.get(job["id"])
+        j["status"], j["result"], j["steps"][1]["status"] = "running", None, "running"
+        jobs._save(j)
+        job = jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(len(FakeChannels.messages["5002"]), 1)

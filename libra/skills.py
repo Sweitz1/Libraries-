@@ -687,6 +687,10 @@ def default_registry(plugin_paths=(), log=print, load_default_dir: bool = True, 
     """Built-in skills, plugins from ``plugin_paths`` and ``~/.libra/plugins``, and the skill catalog."""
     reg = SkillRegistry(catalog=catalog, policy=policy, confirm=confirm)
     _register_builtins(reg)
+    from . import discord
+
+    if discord.available():  # only with a bot token set up
+        discord.register_skills(reg)
     for s in _default.list():  # skills registered with @skill outside a plugin load
         reg.register(s)
     paths = list(plugin_paths)

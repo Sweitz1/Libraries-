@@ -21,7 +21,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 194 Python test functions in 28 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
+- **Tests:** 198 Python test functions in 28 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -212,7 +212,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_autonomy.py`](../tests/test_autonomy.py) | 7 | Memory, check → adjust → learn → reuse, alternatives, retry, blocked, limits |
 | [`test_qr.py`](../tests/test_qr.py) | 2 | QR structure; independent OpenCV decoding (in CI) |
 | [`test_websocket.py`](../tests/test_websocket.py) | 3 | Frames, fragmentation, pings, close codes, bad handshakes |
-| [`test_discord.py`](../tests/test_discord.py) | 2 | A full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
+| [`test_discord.py`](../tests/test_discord.py) | 6 | The Discord skills (bot token only, outside-content gate, effect check, reconcile after a crash, ids that can't change the API path); a full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
 | [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
 | [`test_jobs.py`](../tests/test_jobs.py) | 30 | Failure injection: a full disk after a change, an unwritable journal, damaged job files; Autonomous jobs adjust their plan to meet the goal (bounded, read-only, within permissions) and saved autonomous goals run as jobs; Checking whether a job runs never stops it starting; Changes checked by their effect (passed, failed, unknown, a crashing check); a crash during a change reconciled, not repeated; reconcile "no" runs it again under the trust rules; stable duplicate-safe keys; `remember` checks the memory file; Approvals bound to the exact operation (stale, changed, pre-0.16, over HTTP); continuing after a time limit doesn't approve a change; Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs), including across several steps; a failed read step never falls back to a change; two runners on one job; a torn event line; durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
 | [`test_eval.py`](../tests/test_eval.py) | 3 | Planner suite scoring, likelihood scoring on a trained model, history deltas, the behaviour gate rejecting a model |

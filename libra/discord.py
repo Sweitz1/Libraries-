@@ -25,6 +25,10 @@ then your files, then your trained model. Skills that change something are refus
 here, because nobody can approve them in Discord; allow them with ``libra trust`` if you
 want the bot to use them.
 
+With a bot token set up, Discord is also available as skills to goals and the app (:func:`register_skills`):
+``discord_history`` (read a channel; outside content), ``discord_post`` and ``discord_react`` (changes, checked
+against Discord afterwards). They act as the bot, never as a person's account.
+
 The token comes from ``DISCORD_TOKEN`` or a token file (never the config); the config
 lives in ``~/.libra/discord.json``.
 """
@@ -44,7 +48,7 @@ from . import home
 API = "https://discord.com/api/v10"
 GATEWAY = "wss://gateway.discord.gg/?v=10&encoding=json"
 GUILDS, GUILD_MESSAGES, DIRECT_MESSAGES, MESSAGE_CONTENT = 1 << 0, 1 << 9, 1 << 12, 1 << 15
-INVITE_PERMISSIONS = (1 << 10) | (1 << 11) | (1 << 16)  # view channels, send messages, read message history
+INVITE_PERMISSIONS = (1 << 6) | (1 << 10) | (1 << 11) | (1 << 16)  # add reactions, view channels, send messages, read message history
 FATAL_CLOSE = {4004: "the bot token was rejected", 4010: "invalid shard", 4011: "sharding required",
                4012: "invalid API version", 4013: "invalid intents",
                4014: "a privileged intent isn't enabled: turn on 'Message Content Intent' in the Discord developer "
@@ -95,6 +99,22 @@ def split_message(text: str, limit: int = LIMIT) -> list[str]:
     return parts
 
 
+def _snowflake(value) -> str:
+    """Discord ids are numbers; anything else could change the API path, so it's refused."""
+    value = str(value).strip()
+    if not re.fullmatch(r"\d{1,25}", value):
+        raise DiscordError(f"not a Discord id: {value!r} (copy it with Developer Mode: right-click → Copy ID)")
+    return value
+
+
+def _emoji(value: str) -> str:
+    """A Unicode emoji, or a custom one as name:id."""
+    value = str(value).strip().strip(":")
+    if not value or len(value) > 64 or "/" in value or (":" in value and not re.fullmatch(r"\w{2,32}:\d{1,25}", value)):
+        raise DiscordError(f"not an emoji: {value!r} (use the emoji itself, like 👍, or name:id for a custom one)")
+    return value
+
+
 class REST:
     def __init__(self, token: str, api_base: str = API, timeout: float = 20):
         self.token, self.base, self.timeout = token, api_base.rstrip("/"), timeout
@@ -131,12 +151,30 @@ class REST:
     def me(self) -> dict:
         return self.request("GET", "/users/@me")
 
-    def send(self, channel_id: str, text: str, reply_to: str | None = None) -> None:
+    def send(self, channel_id: str, text: str, reply_to: str | None = None) -> list[str]:
+        """Post ``text`` (split into Discord-sized parts). Returns the new messages' ids."""
+        ids = []
         for i, part in enumerate(split_message(text)):
             body = {"content": part, "allowed_mentions": {"parse": []}}  # never ping @everyone/roles/users
             if reply_to and i == 0:
                 body["message_reference"] = {"message_id": reply_to, "fail_if_not_exists": False}
-            self.request("POST", f"/channels/{channel_id}/messages", body)
+            sent = self.request("POST", f"/channels/{_snowflake(channel_id)}/messages", body)
+            if isinstance(sent, dict) and sent.get("id"):
+                ids.append(str(sent["id"]))
+        return ids
+
+    def messages(self, channel_id: str, limit: int = 20) -> list[dict]:
+        """The channel's most recent messages, newest first."""
+        return self.request("GET", f"/channels/{_snowflake(channel_id)}/messages?limit={max(1, min(int(limit), 100))}")
+
+    def message(self, channel_id: str, message_id: str) -> dict:
+        return self.request("GET", f"/channels/{_snowflake(channel_id)}/messages/{_snowflake(message_id)}")
+
+    def react(self, channel_id: str, message_id: str, emoji: str) -> None:
+        from urllib.parse import quote
+
+        self.request("PUT", f"/channels/{_snowflake(channel_id)}/messages/{_snowflake(message_id)}/reactions/"
+                            f"{quote(_emoji(emoji), safe='')}/@me")
 
     def typing(self, channel_id: str) -> None:
         try:
@@ -437,6 +475,86 @@ HELP = """**Libra** — your own assistant, running on your machine.
 `{p}remember <fact>` / `{p}recall <words>` / `{p}forget <words>` — my memory
 `{p}skills [words]` — what I can do · `{p}status`
 Or just talk to me: calculations, "scrape https://…", "what is perro in English?"."""
+
+
+# ------------------------------------------------------------------- skills
+def available() -> bool:
+    """A bot token is set up (``libra discord setup`` or ``DISCORD_TOKEN``)."""
+    try:
+        read_token()
+        return True
+    except DiscordError:
+        return False
+
+
+def register_skills(reg) -> None:
+    """Discord as Libra skills, with the bot's token (never a personal account's): read a channel (outside
+    content), and post or react (changes: they ask first, and their effect is checked)."""
+    rest = lambda: REST(read_token(), api_base=API)  # noqa: E731  (API is read at call time, for tests)
+
+    def _route_history(message: str):
+        m = re.search(r"\b(?:read|check|get)\b.*\bdiscord channel (\d{1,25})\b", message, re.I)
+        return {"channel": m.group(1)} if m else None
+
+    def _route_post(message: str):
+        m = re.search(r"\b(?:post|send|share)\b.*\b(?:to|in|on) (?:the )?discord channel (\d{1,25})\b", message, re.I)
+        return {"channel": m.group(1), "text": "{prev}"} if m else None
+
+    @reg.skill("discord_history", "Read the recent messages in a Discord channel (the bot must be in it).",
+               {"channel": "the channel's id", "limit": "how many messages (at most 100)"},
+               router=_route_history, risk="read", external=True)
+    def discord_history(channel: str, limit: int = 20):
+        from .skills import SkillResult
+
+        msgs = rest().messages(channel, limit)
+        lines = []
+        for m in reversed(msgs):  # oldest first, like reading the channel
+            who = (m.get("author") or {}).get("global_name") or (m.get("author") or {}).get("username") or "?"
+            text = m.get("content") or ("(attachment)" if m.get("attachments") else
+                                        "(no text: turn on the Message Content intent to read it)")
+            lines.append(f"[{str(m.get('timestamp', ''))[:16].replace('T', ' ')}] {who}: {text}")
+        data = [{"id": m.get("id"), "author": (m.get("author") or {}).get("username"), "text": m.get("content", ""),
+                 "time": m.get("timestamp")} for m in msgs]
+        return SkillResult("discord_history", True, "\n".join(lines) or "(no messages)", data)
+
+    def _posted(args, result=None):
+        if result is not None and isinstance(result.data, dict) and result.data.get("ids"):
+            r = rest()  # every part that was sent is there, with the text that was sent
+            parts = split_message(str(args.get("text", "")))
+            return all(r.message(args["channel"], mid).get("content") == part
+                       for mid, part in zip(result.data["ids"], parts))
+        r = rest()  # after a crash: did the bot already post this text recently?
+        me, first = r.me()["id"], split_message(str(args.get("text", "")))[0]
+        return any((m.get("author") or {}).get("id") == me and m.get("content") == first
+                   for m in r.messages(args["channel"], 50))
+
+    @reg.skill("discord_post", "Post a message to a Discord channel as the bot (mentions never ping anyone).",
+               {"channel": "the channel's id", "text": "what to post"}, router=_route_post, risk="write",
+               verify=_posted, reconcile=_posted)
+    def discord_post(channel: str, text: str):
+        from .skills import SkillResult
+
+        if not str(text).strip():
+            raise ValueError("nothing to post")
+        ids = rest().send(channel, text)
+        return SkillResult("discord_post", True, f"Posted {len(ids)} message(s) to channel {channel}.", {"ids": ids})
+
+    def _reacted(args, result=None):
+        want = _emoji(args.get("emoji", ""))
+        msg = rest().message(args["channel"], args["message"])
+        for r in msg.get("reactions") or []:
+            e = r.get("emoji") or {}
+            name = f"{e.get('name')}:{e.get('id')}" if e.get("id") else e.get("name")
+            if r.get("me") and name == want:
+                return True
+        return False
+
+    @reg.skill("discord_react", "Add an emoji reaction to a Discord message as the bot.",
+               {"channel": "the channel's id", "message": "the message's id", "emoji": "e.g. 👍, or name:id"},
+               risk="write", verify=_reacted, reconcile=_reacted)
+    def discord_react(channel: str, message: str, emoji: str):
+        rest().react(channel, message, emoji)
+        return f"Reacted {emoji} to message {message}."
 
 
 def invite_url(application_id: str) -> str:

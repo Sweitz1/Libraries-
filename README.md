@@ -427,6 +427,12 @@ How it behaves:
 - **The allow list.** Only users on it can start goals, run saved goals or change memory. Everyone else can ask questions, translate and use read-only skills.
 - **No approvals in Discord.** Skills that change something are refused there (allow them with `libra trust` if you want the bot to use them).
 - **It never pings anyone**, because replies are sent with mentions disabled. Long replies are split to fit Discord's limit, and rate limits are respected.
+- **Discord as skills.** Once a bot token is set up, goals and the app can use Discord too, always as the bot and never as your personal account:
+  - `discord_history`: a channel's recent messages. They are **outside content**, so text from a channel can never make Libra change something without your approval.
+  - `discord_post`: post a message, for example `libra agent run "scrape https://example.com/news then summarize it then post it to discord channel 123456789012345678"`.
+  - `discord_react`: add an emoji reaction.
+
+  Posting and reacting are changes, so they ask first unless you allow them (`libra trust allow discord_post`). Each one is checked against Discord afterwards (the message is there, with that text). After a crash, Libra checks whether the post already went out instead of posting twice. Reading a channel needs the bot's *Read Message History* permission. Reacting needs *Add Reactions*, which is in the invite link from `libra discord check`; a bot invited before this needs inviting again. Without the *Message Content* intent, Discord hides the text of messages that don't mention the bot.
 - **Notifications:** a Discord **webhook URL** works anywhere a notify URL is accepted. Use it in `libra-auto.json` for training, or in `~/.libra/agent/settings.json` (`{"notify": {"url": "…"}}`) for scheduled goals.
 
 ## Your files as a knowledge base (grounded answers)
