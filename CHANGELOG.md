@@ -32,6 +32,7 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - **Discord skills** for goals and the app, with the bot's token: `discord_history` (a channel's messages, treated as outside content), `discord_post` and `discord_react` (changes that ask first, are checked against Discord afterwards, and aren't repeated after a crash). Discord ids are checked to be numbers before they go into an API path. The invite link now includes *Add Reactions*.
 
 ### Fixed
+- **The Discord bot ignored `!` commands in servers.** Without the Message Content intent, Discord sends a bot empty text for server messages that don't mention it, but the docs and the bot's help said the prefix worked without it. In servers, the help now shows commands as @mentions, and the bot logs which mode it's in. `libra discord set message_content on` (after enabling the intent in the developer portal) makes `!` commands work there.
 - A damaged job file (cut off, or not a job) was hidden from `libra jobs list` and the app, and failed with a raw JSON error; the server answered "n must be a number". It's now listed as `damaged`, with the file's path, and resuming carries on with the other jobs.
 - A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
 - A sign-in link opened in a tab that already showed the app was ignored (only the `#fragment` changed).

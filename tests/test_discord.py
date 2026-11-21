@@ -196,6 +196,41 @@ class DiscordTest(unittest.TestCase):
         self.assertEqual(bot.addressed(message("x", "anything", channel="c2")["d"]), "anything")
         self.assertTrue(bot.intents & (1 << 15))  # listening to a channel needs Message Content
 
+    def test_without_message_content_servers_need_a_mention(self):
+        from libra.discord import Bot
+
+        bot = Bot("t", None, config={"prefix": "!"}, log=None)
+        bot.user_id, bot.username = BOT_ID, "Libra"
+        self.assertFalse(bot.reads_server_text)
+        self.assertFalse(bot.intents & (1 << 15))
+        # what Discord really sends a bot without the intent: "!help" in a server arrives with no text
+        hidden = message("x", "", mentions=[])["d"]
+        self.assertIsNone(bot.addressed(hidden))
+        # so the help shows commands as @mentions in servers, and says why the prefix doesn't work there
+        text = bot.respond("help", "111")
+        self.assertIn("`@Libra ask <question>`", text)
+        self.assertIn("Message Content intent", text)
+        self.assertNotIn("`!ask", text)
+
+        bot.cfg["message_content"] = True  # the owner enabled the intent in the portal
+        self.assertTrue(bot.intents & (1 << 15))
+        self.assertIn("`!ask <question>`", bot.respond("help", "111"))
+        self.assertEqual(bot.addressed(message("x", "!help")["d"]), "help")
+
+    def test_set_message_content(self):
+        import contextlib
+        import io
+
+        from libra import discord
+        from libra.cli import main
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["discord", "set", "message_content", "on"])
+        self.assertTrue(discord.load_config()["message_content"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(["discord", "set", "message_content", "off"])
+        self.assertFalse(discord.load_config()["message_content"])
+
 
 if __name__ == "__main__":
     unittest.main()
