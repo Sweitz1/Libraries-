@@ -27,6 +27,11 @@ def _add_device(p: argparse.ArgumentParser) -> None:
                    help="gpu needs an NVIDIA GPU and CuPy (pip install cupy-cuda12x)")
 
 
+def _add_workspace_flags(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--workspace", help="answer only from the files in this workspace (see libra kb)")
+    p.add_argument("--grounded", action="store_true", help="same, using the default workspace ~/.libra/workspace")
+
+
 def _add_skill_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--plugins", action="append", default=[], help="plugin .py file or folder (repeatable)")
     p.add_argument("--allow-private", action="store_true", help="let web skills reach local/LAN addresses")
@@ -59,13 +64,78 @@ def cmd_generate(args) -> None:
     sys.stdout.write("\n")
 
 
+def _workspace(args):
+    from .knowledge import DEFAULT_WORKSPACE, Workspace
+
+    path = getattr(args, "workspace", None)
+    return Workspace(path or DEFAULT_WORKSPACE) if (path or getattr(args, "grounded", False)) else None
+
+
+def _workspace_command(ws, line: str, last_question: str | None) -> bool:
+    """Handle /add /correct /rule /rules /sources /forget. Returns True if handled."""
+    cmd, _, rest = line.partition(" ")
+    rest = rest.strip()
+    if cmd == "/add":
+        if not rest:
+            print("usage: /add <file or folder> [...]")
+            return True
+        try:
+            report = ws.add(shlex.split(rest))
+        except FileNotFoundError as exc:
+            print(f"(not found: {exc})")
+            return True
+        _print_add_report(report)
+    elif cmd == "/correct":
+        if not (rest and last_question):
+            print("usage: /correct <the right answer>  (corrects the answer to your last question)")
+        else:
+            ws.correct(last_question, rest)
+            print(f"(saved: from now on, \"{last_question}\" is answered with your correction)")
+    elif cmd == "/rule":
+        if not rest:
+            print("usage: /rule <instruction>, e.g. /rule always answer in bullet points")
+        else:
+            ws.add_rule(rest)
+            st = ws.style
+            print(f"(rule saved; style is now: {'bullets' if st.bullets else 'paragraph'}, "
+                  f"up to {st.max_sentences} sentence(s), clarifying questions {'on' if st.clarify else 'off'})")
+    elif cmd == "/rules":
+        print("\n".join(f"{i}. {r['text']}  ({r['date'][:10]})" for i, r in enumerate(ws.rules, 1)) or "(no rules)")
+    elif cmd == "/sources":
+        print(ws.summary())
+    elif cmd == "/forget":
+        print("(removed)" if rest and ws.remove(rest) else "usage: /forget <file path as shown in /sources>")
+    else:
+        return False
+    return True
+
+
+def _print_add_report(report) -> None:
+    print(f"added {len(report['added'])} file(s), {len(report['unchanged'])} unchanged")
+    if report["media_without_text"]:
+        print("media I can't read directly (add a .vtt/.srt transcript or .txt description with the same name):")
+        for f in report["media_without_text"]:
+            print(f"  {f}")
+    if report["unsupported"]:
+        print("unsupported file types (skipped): " + ", ".join(os.path.basename(f) for f in report["unsupported"][:10])
+              + (" …" if len(report["unsupported"]) > 10 else ""))
+
+
 def cmd_chat(args) -> None:
-    B.use(args.device)
-    model, tok, _ = checkpoint.load(args.model)
+    ws = _workspace(args)
+    model = tok = None
+    if ws is None:
+        B.use(args.device)
+        model, tok, _ = checkpoint.load(args.model)
     params = _sampling(args)
     skills = _registry(args)
     history: list[dict] = [{"role": "system", "content": args.system}] if args.system else []
-    print("libra chat — /skills lists tools, /reset clears, /exit quits")
+    last_question = None
+    if ws is not None:
+        print(f"libra grounded chat — answers come only from your files ({len(ws.sources)} indexed in {ws.path})")
+        print("/add <path>, /correct <answer>, /rule <instruction>, /rules, /sources, /skills, /reset, /exit")
+    else:
+        print("libra chat — /skills lists tools, /reset clears, /exit quits")
     while True:
         try:
             line = input("you> ").strip()
@@ -82,6 +152,8 @@ def cmd_chat(args) -> None:
             continue
         if line in ("/skills", "/help"):
             print(_skills_help(skills))
+            continue
+        if ws is not None and line.startswith("/") and _workspace_command(ws, line, last_question):
             continue
         call = None
         if line.startswith("/"):
@@ -100,6 +172,16 @@ def cmd_chat(args) -> None:
             history.append({"role": "assistant", "content": result.text[:500]})
             continue
         history.append({"role": "user", "content": line})
+        if ws is not None:
+            from .knowledge import CLARIFY_MARKER
+
+            follows_up = len(history) >= 3 and history[-2]["content"].startswith(CLARIFY_MARKER)
+            answer = ws.ask_chat(history)
+            if answer.status == "answered":  # what /correct will correct
+                last_question = history[-3]["content"] if follows_up and answer.text else line
+            print(f"libra> {answer.text}")
+            history.append({"role": "assistant", "content": answer.text})
+            continue
         prompt = chat_fmt.render(history, add_generation_prompt=True)
         sys.stdout.write("libra> ")
         parts = []
@@ -111,13 +193,53 @@ def cmd_chat(args) -> None:
         history.append({"role": "assistant", "content": "".join(parts).strip()})
 
 
+def cmd_kb(args) -> None:
+    from .knowledge import DEFAULT_WORKSPACE, Workspace
+
+    ws = Workspace(args.workspace or DEFAULT_WORKSPACE)
+    a, rest = args.action, args.items
+    if a == "add":
+        if not rest:
+            raise SystemExit("usage: libra kb add <file or folder> [...]")
+        _print_add_report(ws.add(rest))
+    elif a == "ask":
+        answer = ws.ask(" ".join(rest), clarify=not args.no_clarify)
+        print(json.dumps(answer.to_dict(), indent=2, ensure_ascii=False) if args.json else answer.text)
+    elif a == "correct":
+        if len(rest) != 2:
+            raise SystemExit('usage: libra kb correct "question" "right answer"')
+        ws.correct(*rest)
+        print("(correction saved)")
+    elif a == "rule":
+        ws.add_rule(" ".join(rest))
+        print("(rule saved)")
+    elif a == "rules":
+        print("\n".join(f"{i}. {r['text']}" for i, r in enumerate(ws.rules, 1)) or "(no rules)")
+    elif a == "list":
+        print(ws.summary())
+    elif a == "remove":
+        for path in rest:
+            print(("removed " if ws.remove(path) else "not indexed: ") + path)
+    elif a == "export":
+        out = rest[0] if rest else "datasets/workspace"
+        stats = ws.export_training(out)
+        print(f"wrote {stats['documents']} document(s) and {stats['conversations']} correction(s) to {out}\n"
+              f"train on them with: libra train {out} --out checkpoints/mine")
+
+
 def cmd_serve(args) -> None:
     from .server import Engine, serve
 
     print(f"device: {B.use(args.device)}")
-    model, tok, _ = checkpoint.load(args.model)
+    ws = _workspace(args)
+    model = tok = None
+    if ws is None or os.path.exists(os.path.join(args.model, "model.npz")):
+        model, tok, _ = checkpoint.load(args.model)
     skills = _registry(args)
-    serve(Engine(model, tok, name=args.name, skills=skills, auto_skills=args.auto_skills), args.host, args.port)
+    if ws is not None:
+        print(f"grounded: chat answers come from {len(ws.sources)} file(s) in {ws.path}")
+    serve(Engine(model, tok, name=args.name, skills=skills, auto_skills=args.auto_skills, workspace=ws),
+          args.host, args.port)
 
 
 def _registry(args):
@@ -275,6 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_device(c)
     _add_skill_flags(c)
     c.add_argument("--no-auto-skills", action="store_true", help="only run skills via /commands")
+    _add_workspace_flags(c)
     c.set_defaults(func=cmd_chat)
 
     s = sub.add_parser("serve", help="OpenAI-compatible API server (no key needed)")
@@ -286,6 +409,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_skill_flags(s)
     s.add_argument("--auto-skills", action="store_true",
                    help="answer chat messages like 'scrape https://...' or '2+2' with the matching skill")
+    _add_workspace_flags(s)
     s.set_defaults(func=cmd_serve)
 
     k = sub.add_parser("skill", help="list, describe or run skills (built-in and plugins)")
@@ -294,6 +418,14 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("args", nargs="*", help="positional values and/or key=value")
     _add_skill_flags(k)
     k.set_defaults(func=cmd_skill)
+
+    kb = sub.add_parser("kb", help="your files as a knowledge base: grounded, cited answers")
+    kb.add_argument("action", choices=["add", "ask", "correct", "rule", "rules", "list", "remove", "export"])
+    kb.add_argument("items", nargs="*", help="paths, a question, or (for correct) question and answer")
+    kb.add_argument("--workspace", help="workspace folder (default ~/.libra/workspace)")
+    kb.add_argument("--no-clarify", action="store_true", help="never ask a clarifying question first")
+    kb.add_argument("--json", action="store_true", help="ask: print status, text, citations and questions as JSON")
+    kb.set_defaults(func=cmd_kb)
 
     w = sub.add_parser("scrape", help="extract text, tables, links or CSS-selected elements from a web page")
     w.add_argument("url")

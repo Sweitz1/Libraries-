@@ -17,7 +17,8 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/server.py` | OpenAI-compatible HTTP API (standard library only), with streaming |
 | `libra/web.py` | Web fetcher (robots.txt, rate limits, private-address guard), HTML parser, CSS selector engine, scraper and crawler |
 | `libra/skills.py` | Skills (tools), plugin loader, message routing, built-in skills |
-| `libra/cli.py` | `libra data / train / generate / chat / serve / skill / scrape / crawl / info` |
+| `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
+| `libra/cli.py` | `libra data / train / generate / chat / serve / kb / skill / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -106,6 +107,52 @@ A rule of thumb: you want at least about 20 training tokens per parameter. Keep 
 ### Useful flags
 
 `--vocab` tokenizer size · `--ctx` context length · `--layers` `--heads` `--embd` model size · `--batch` batch size · `--steps` training steps · `--lr` peak learning rate · `--dropout` · `--eval-every` · `--resume` · `--sample-prompt` text used for the preview printed at each evaluation.
+
+## Your files as a knowledge base (grounded answers)
+
+Libra can answer **only from your own files**, citing exactly where each sentence came from. When the answer isn't in your files, it says so instead of guessing.
+
+```bash
+libra kb add ~/notes ~/meetings/sync.vtt        # index files and folders
+libra kb ask "What is the Falcon budget?"
+```
+```
+The Falcon budget for 2027 is 40,000 dollars, approved by Dana in October. [1] Most of it goes to cloud hosting and two contractors. [2]
+
+Sources:
+[1] notes/plan.md, line 3
+[2] notes/plan.md, line 4
+```
+
+Or chat with your files. No trained model is needed for this:
+
+```bash
+libra chat --workspace ~/my-workspace     # or --grounded for the default ~/.libra/workspace
+```
+
+| Chat command | What it does |
+|---|---|
+| `/add <path>` | Index files or folders. Changed files are re-indexed and unchanged ones skipped |
+| `/correct <answer>` | Save the right answer to your last question. It's used from then on (it survives restarts) and cited as "your correction" |
+| `/rule <instruction>` | Save a standing rule, e.g. "always answer in bullet points", "keep it short", "don't ask clarifying questions" |
+| `/rules`, `/sources`, `/forget <path>` | Show rules, show indexed files, remove a file |
+
+How it behaves:
+
+- **Your files come first.** Answers are built only from your files' sentences, found with BM25 search. Nothing comes from the model's own memory.
+- **Every sentence is cited** with a file and line, or a media file and timestamp: `media/sync.mp4 (transcript: sync.vtt) @ 00:01:05–00:01:09`.
+- **It doesn't guess.** If nothing relevant is found, it says so and asks which file covers the question.
+- **It asks before answering when it isn't clear.** If two files answer about equally well (say, a meeting says "March 3rd" and the roadmap says "spring"), it lists both and asks which you mean. Reply with a number, a file name or "all".
+- **It learns from you.** Corrections and rules are saved in the workspace folder (`corrections.json`, `rules.json`) and apply to every later answer.
+- **It can match your style.** `libra kb export datasets/me` writes your files and corrections as training data. Then `libra train datasets/me` teaches a Libra model your vocabulary and tone.
+
+Supported files: `.txt` `.md` `.html` `.csv` `.json`/`.jsonl` (including chat logs) and **`.srt`/`.vtt` transcripts with timestamps**.
+
+**Images, audio and video:** Libra has no vision or speech model, so it can't look at a picture or listen to a recording. Put a transcript or description next to the file with the same name, for example `talk.mp4` + `talk.vtt`, or `whiteboard.jpg` + `whiteboard.txt`. Libra then indexes it and cites the media file. `/add` lists any media it found without one. PDFs aren't read yet; export them to text first.
+
+**Limits:** Matching is by words, not meaning, so a question phrased very differently from your files may come back "not found". Rephrase it, or add a correction so that phrasing works next time. Answers quote your files rather than paraphrasing them.
+
+The server can answer from a workspace too: `libra serve --workspace ~/my-workspace` makes `/v1/chat/completions` grounded, with citations in the reply and in a `libra_grounding` field, and adds `POST /v1/workspace/ask`, `/v1/workspace/correct` and `/v1/workspace/rule`.
 
 ## Skills and plugins
 

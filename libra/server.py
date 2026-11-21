@@ -1,7 +1,8 @@
 """OpenAI-compatible HTTP server (standard library only, no API key needed).
 
 Endpoints: GET /health, GET /v1/models, POST /v1/chat/completions,
-POST /v1/completions, GET /v1/skills, POST /v1/skills/<name>. Streaming uses server-sent events like the OpenAI API,
+POST /v1/completions, GET /v1/skills, POST /v1/skills/<name>,
+POST /v1/workspace/ask|correct|rule. Streaming uses server-sent events like the OpenAI API,
 so any OpenAI-compatible client (including Nexus Agent) can connect.
 """
 from __future__ import annotations
@@ -17,7 +18,9 @@ from .generate import SamplingParams, stream_text
 
 
 class Engine:
-    def __init__(self, model, tokenizer, name: str = "libra", skills=None, auto_skills: bool = False):
+    def __init__(self, model, tokenizer, name: str = "libra", skills=None, auto_skills: bool = False,
+                 workspace=None):
+        self.workspace = workspace
         self.model = model
         self.tokenizer = tokenizer
         self.name = name
@@ -141,7 +144,23 @@ def make_handler(engine: Engine):
                 self._error(400, f"bad request: {exc}")
                 return
 
-            if path.startswith("/v1/skills/"):
+            if path in ("/v1/workspace/ask", "/v1/workspace/correct", "/v1/workspace/rule"):
+                ws = engine.workspace
+                if ws is None:
+                    self._error(404, "server was started without --workspace")
+                    return
+                try:
+                    if path.endswith("ask"):
+                        out = ws.ask(str(body["question"]), body.get("clarify")).to_dict()
+                    elif path.endswith("correct"):
+                        out = ws.correct(str(body["question"]), str(body["answer"]))
+                    else:
+                        out = ws.add_rule(str(body["rule"]))
+                except KeyError as exc:
+                    self._error(400, f"missing field {exc}")
+                    return
+                self._json(200, out)
+            elif path.startswith("/v1/skills/"):
                 name = path[len("/v1/skills/"):]
                 if engine.skills is None or name not in engine.skills:
                     self._error(404, f"unknown skill {name!r}")
@@ -163,9 +182,19 @@ def make_handler(engine: Engine):
                 if result is not None:
                     self._respond_text(body, result.text, result.skill)
                     return
+                if engine.workspace is not None:
+                    answer = engine.workspace.ask_chat(messages)
+                    self._respond_text(body, answer.text, "workspace", extra={"libra_grounding": answer.to_dict()})
+                    return
+                if engine.model is None:
+                    self._error(503, "no model loaded")
+                    return
                 prompt = chat.render(messages, add_generation_prompt=True)
                 self._respond(body, params, prompt, chat_mode=True)
             elif path == "/v1/completions":
+                if engine.model is None:
+                    self._error(503, "no model loaded (grounded workspace mode only answers chat requests)")
+                    return
                 prompt = body.get("prompt", "")
                 if isinstance(prompt, list):
                     prompt = "".join(map(str, prompt))
@@ -173,10 +202,11 @@ def make_handler(engine: Engine):
             else:
                 self._error(404, f"unknown path {self.path}")
 
-        def _respond_text(self, body, text: str, skill_name: str):
+        def _respond_text(self, body, text: str, skill_name: str, extra: dict | None = None):
             """Reply with a skill's output in the normal chat-completion format."""
             cid = "chatcmpl-" + uuid.uuid4().hex[:24]
-            base = {"id": cid, "created": int(time.time()), "model": engine.name, "libra_skill": skill_name}
+            base = {"id": cid, "created": int(time.time()), "model": engine.name, "libra_skill": skill_name,
+                    **(extra or {})}
             if not body.get("stream"):
                 self._json(200, dict(base, object="chat.completion", choices=[
                     {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
