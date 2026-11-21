@@ -1,4 +1,5 @@
 ---
+name: release
 description: Prepares and checks a Libra release (version bump, changelog, dry run of the release workflow, tag, and checking the published files). Use only when the user asks to release, publish or tag a version.
 disable-model-invocation: true
 argument-hint: "X.Y.Z"

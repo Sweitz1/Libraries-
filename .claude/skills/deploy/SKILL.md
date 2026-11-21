@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Deploy Libra to the user's Debian server (install or upgrade the services), check that it came up, and roll back if it didn't
+description: Deploys Libra to the user's Debian server (installs or upgrades the services), checks that it came up, and rolls back if it didn't. Use only when the user asks to deploy, upgrade or roll back their Libra server.
 context: fork
 disable-model-invocation: true
 argument-hint: "user@server [version, e.g. v0.15.0] [installer options]"

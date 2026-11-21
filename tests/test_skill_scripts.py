@@ -3,6 +3,7 @@ errors, documented exit codes, structured stdout. They are what an agent runs, s
 here breaks the skill."""
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -15,6 +16,38 @@ SKILLS = os.path.join(ROOT, ".claude", "skills")
 
 def run(*cmd, env=None):
     return subprocess.run(list(cmd), capture_output=True, text=True, timeout=120, env=env, cwd=ROOT)
+
+
+class SkillSpecTest(unittest.TestCase):
+    """Every project skill follows the Agent Skills specification (https://agentskills.io/specification),
+    so it loads in any tool that supports the standard, not only Claude Code."""
+
+    NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")  # lowercase, digits, single hyphens, no hyphen at either end
+    SPEC = {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
+    CLAUDE_CODE = {"argument-hint", "context", "disable-model-invocation", "model", "agent", "paths", "hooks"}
+
+    def test_frontmatter(self):
+        from libra.yamlish import loads  # Libra's own YAML reader: no PyYAML needed
+
+        folders = sorted(os.listdir(SKILLS))
+        self.assertGreater(len(folders), 10)
+        for folder in folders:
+            with open(os.path.join(SKILLS, folder, "SKILL.md"), encoding="utf-8") as f:
+                text = f.read()
+            with self.subTest(skill=folder):
+                self.assertTrue(text.startswith("---\n"), "frontmatter must open the file")
+                fm = loads(text.split("---")[1])
+                self.assertIsInstance(fm, dict)
+                self.assertEqual(fm.get("name"), folder, "name is required and must match the folder")
+                self.assertRegex(fm["name"], self.NAME)
+                self.assertLessEqual(len(fm["name"]), 64)
+                d = fm.get("description") or ""
+                self.assertTrue(0 < len(d) <= 1024, "description: 1 to 1024 characters")
+                self.assertRegex(d.lower(), r"\buse (only )?(when|before|for)\b", "say when to use it")
+                self.assertLessEqual(len(fm.get("compatibility", "")), 500)
+                self.assertEqual(set(fm) - self.SPEC - self.CLAUDE_CODE, set(), "unknown frontmatter field")
+                for script in re.findall(r"\*\*`(scripts/[^`]+)`\*\*", text):  # listed scripts exist
+                    self.assertTrue(os.path.exists(os.path.join(SKILLS, folder, script)), script)
 
 
 class RollDiceTest(unittest.TestCase):

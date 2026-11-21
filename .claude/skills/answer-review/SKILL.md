@@ -1,4 +1,5 @@
 ---
+name: answer-review
 description: Works through an external code review or audit of Libra point by point. It checks each claim against the current code, reproduces real bugs before fixing them, fixes them with tests that fail on the old code, and records the response in docs/REVIEW.md. Use when the user pastes a review, audit, security report or roadmap about Libra.
 ---
 

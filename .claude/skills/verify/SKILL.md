@@ -1,4 +1,5 @@
 ---
+name: verify
 description: Runs Libra's checks for the parts a change touches (Python tests, the end-to-end smoke script, the Java client, the Android app's JVM tests) and reports what passed. Use before committing, after a fix, or when asked to check or test the code.
 compatibility: Requires bash, git and Python 3.9+. The java check needs Maven and JDK 11+; android needs a JDK and network access to Maven Central once; workflows needs PyYAML. Missing tools make a check "skipped", never "passed".
 ---

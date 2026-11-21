@@ -1,6 +1,6 @@
 ---
 name: my-skill
-description: What this skill does, and when to use it (Claude reads this to decide when to load it)
+description: What this skill does, in specific words. Use when … (the situations and words that should load it; Claude reads this to decide)
 disable-model-invocation: true
 allowed-tools: Read Grep
 ---
@@ -33,7 +33,11 @@ Copy this folder to .claude/skills/<name>/ in this repository, or to ~/.claude/s
 on your own computer. The folder name, or `name` above, becomes the command: /my-skill.
 
 Frontmatter:
-  description               When to use it. Specific words help Claude pick it at the right moment.
+  name                      Required by the Agent Skills spec: lowercase letters, digits and single hyphens,
+                            up to 64 characters, the same as the folder name.
+  description               What it does and when to use it ("Use when …"), up to 1024 characters.
+                            Specific words help the agent pick it at the right moment.
+  compatibility             What it needs to run, e.g. "Requires Python 3.9+", up to 500 characters.
   disable-model-invocation  true: only a person starts it (anything that publishes, deploys or deletes).
                             Leave it out to let Claude use the skill when it's relevant.
   allowed-tools             Tools the skill may use without asking, e.g. "Read Grep" for a read-only
