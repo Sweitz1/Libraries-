@@ -438,6 +438,55 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(job["steps"][0]["skill"], "remember")
         self.assertEqual((job["status"], job["result"]["effects"][0]["status"]), ("done", "passed"))
 
+    def test_an_autonomous_job_adjusts_its_plan_to_meet_the_goal(self):
+        from libra import agent, jobs
+
+        reg = build_registry(self.state, allow_send=True)
+        goal = "collect the news sources then digest each of them in 1 sentences"
+        plain = jobs.run(jobs.create(goal, reg)["id"], reg, retry_delay=0)
+        self.assertEqual(plain["status"], "needs_review")  # a plain job reports the miss; it doesn't change its plan
+
+        job = jobs.run(jobs.create(goal, reg, autonomous=True)["id"], reg, retry_delay=0)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual([s["skill"] for s in job["steps"]], ["collect_sources", "digest", "summarize"])
+        self.assertEqual(job["adjustments"], 1)
+        self.assertTrue(job["result"]["verified"])
+        self.assertEqual(len(calls(self.state, "digest")), 6)  # the plain run's three, and three here: no repeats
+        adjusted = [e for e in jobs.events(job["id"]) if e["event"] == "adjusted"]
+        self.assertEqual(adjusted[0]["unmet"], ["at most 1 sentence(s)"])
+        self.assertIn(job["learned"], agent.load_procedures())  # the plan that worked is kept
+
+        # the adjustment is part of the saved job: interrupted while the added step ran, a resume finishes
+        # that step instead of adjusting again
+        j = jobs.get(job["id"])
+        j["status"], j["result"] = "running", None
+        j["steps"][2].update(status="running", output="")
+        jobs._save(j)
+        job = jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual((job["status"], job["adjustments"], len(job["steps"])), ("done", 1, 3))
+
+    def test_adjusting_never_adds_a_skill_the_goal_was_not_allowed(self):
+        from libra import jobs
+
+        reg = build_registry(self.state, allow_send=True)
+        goal = "collect the news sources then digest each of them in 1 sentences"
+        job = jobs.run(jobs.create(goal, reg, autonomous=True,
+                                   permissions={"skills": ["collect_sources", "digest"], "preapproved": []})["id"],
+                       reg, retry_delay=0)
+        self.assertEqual(job["status"], "needs_review")  # summarize is outside this goal's permissions
+        self.assertEqual(job["adjustments"], 0)
+
+    def test_saved_autonomous_goals_run_as_durable_jobs(self):
+        from libra import agent, jobs
+
+        strict = build_registry(self.state)  # send_report asks
+        agent.add_goal("digest", GOAL, "hourly", strict, autonomous=True, allow=["send_report"])
+        r = agent.run_goal(GOAL, strict, name="digest", autonomous=True)
+        self.assertEqual(r.status, "done")  # its pre-approval counts (the old loop ignored it and stopped)
+        self.assertEqual(calls(self.state, "send"), ["3"])
+        newest = jobs.listing(1)[0]
+        self.assertEqual((newest["name"], newest["status"]), ("digest", "done"))  # a job: durable, with history
+
     def test_cancel_and_time_limit(self):
         from libra import jobs
 

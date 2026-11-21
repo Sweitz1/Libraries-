@@ -380,7 +380,9 @@ In the app, tick **Autonomous** on the Agent tab. On Discord, use `goal …`. Au
 - **Remembers** what each goal produced, so you can ask about it later.
 - **Explains itself.** Each decision is shown as a thought, with its reasoning, the action taken and a caveat.
 
-It still stops at step, time and iteration limits, and it stops (rather than working around the rules) when a skill needs approval.
+**Saved autonomous goals, and the app's Autonomous button, run as durable jobs** (above). They survive a restart, pause for approval instead of stopping, keep to the goal's permissions and pre-approvals, and check each change's effect. The adjusting happens inside the job, at most twice, and only with read-only skills the goal is allowed to use. Each adjustment is in `libra jobs show <id> --events`. `libra agent auto` in a terminal still runs the step-by-step loop that explains each thought.
+
+It still stops at step, time and iteration limits, and it doesn't work around the rules when a skill needs approval.
 
 **What it isn't.** There's no large language model behind this; Libra's own model is too small to reason reliably, and Libra uses no outside models. So the "thinking" is rule-based. It's good at goals built from your skills, but it won't invent new approaches the way GPT-based AutoGPT does.
 

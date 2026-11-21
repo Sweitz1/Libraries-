@@ -506,27 +506,21 @@ def make_handler(engine: Engine):
                         self._json(200, {"started": False, "plan": p.to_dict()})
                         return
 
-                    job = None
-                    if not autonomous:  # plain goals run as durable jobs
-                        from . import jobs
+                    from . import jobs  # every goal runs as a durable job; autonomous ones also adjust and learn
 
-                        job = jobs.create(goal, engine.skills, name=name, permissions=agent.goal_permissions(name))
+                    job = jobs.create(goal, engine.skills, name=name, autonomous=autonomous,
+                                      permissions=agent.goal_permissions(name))
 
                     def work():
                         steps = []
                         engine.agent_current = {"goal": goal, "name": name, "steps": steps, "autonomous": autonomous,
-                                                "job": job["id"] if job else None}
-                        if autonomous:
-                            from .autonomy import pursue
-
-                            r = pursue(goal, engine.skills, name=name, log=steps.append)
-                        else:
-                            r = jobs.to_run(jobs.run(job["id"], engine.skills, log=steps.append))
+                                                "job": job["id"]}
+                        r = jobs.to_run(jobs.run(job["id"], engine.skills, log=steps.append))
                         agent.record(r)
 
                     engine.agent_thread = threading.Thread(target=work, daemon=True)
                     engine.agent_thread.start()
-                    self._json(202, {"started": True, "plan": p.to_dict(), "job": job["id"] if job else None})
+                    self._json(202, {"started": True, "plan": p.to_dict(), "job": job["id"]})
                 else:
                     self._error(404, f"unknown agent action {action!r}")
             except ValueError as exc:

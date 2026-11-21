@@ -48,6 +48,7 @@ except ImportError:  # pragma: no cover - Windows
 
 FINAL = ("done", "failed", "cancelled", "needs_review")
 DEFAULT_LIMITS = {"max_attempts": 3, "max_items": 5, "max_seconds": 600, "max_steps": 12}
+MAX_ADJUSTMENTS = 2  # an autonomous job may change its own plan this many times to meet the goal
 OUTPUT_CHARS = 20000
 LOCK_WAIT = 2.0  # seconds a runner or an owner decision waits for a job's lock before giving up
 
@@ -215,6 +216,67 @@ def _uses_prev(step) -> bool:
                                                   for v in step.args.values())
 
 
+def _new_step(n: int, s, risk: str, needs, inputs: list) -> dict:
+    return {"n": n, "clause": s.clause, "skill": s.skill, "risk": risk, "args": s.args,
+            "foreach": s.foreach, "items": list(s.items), "why": s.why, "needs": sorted(needs), "inputs": inputs,
+            "untrusted": False, "status": "pending", "attempts": 0, "started": None, "finished": None,
+            "output": "", "data": None, "item_results": {}, "error": "", "tried": [s.skill]}
+
+
+def _adjust_job(job: dict, registry) -> bool:
+    """Autonomous jobs only: every step is done but the result misses a check read from the goal (e.g.
+    "in 3 sentences"). Change the plan the way autonomous mode does (re-run the last summary with the
+    right length, or add one), at most ``MAX_ADJUSTMENTS`` times, with read-only skills inside the goal's
+    permissions. Returns True if the plan changed and the job should keep running."""
+    from .agent import Step
+    from .autonomy import _adjust, _checks
+
+    if not job.get("autonomous") or job.get("adjustments", 0) >= MAX_ADJUSTMENTS:
+        return False
+    if any(s["status"] != "done" for s in job["steps"]) or not job["steps"]:
+        return False
+    output = job["steps"][-1]["output"]
+    unmet = [label for label, ok in _checks(job["goal"]) if not ok(output)]
+    if not unmet:
+        return False
+    plan = [Step(s["clause"], s["skill"], dict(s["args"]), s["foreach"], list(s["items"]), s["why"]) for s in job["steps"]]
+    new = _adjust(plan, unmet, job["goal"])
+    if new is None:
+        return False
+    scope = (job.get("permissions") or {}).get("skills")
+    for s in new[len(job["steps"]):] + [new[len(job["steps"]) - 1]]:
+        if _risk(registry, s.skill) != "read" or (scope is not None and s.skill not in scope):
+            return False  # adjusting never adds a change, or a skill the goal wasn't allowed
+    last = job["steps"][-1]
+    if new[len(job["steps"]) - 1].args != last["args"]:  # same step, different arguments: run it again
+        changed = new[len(job["steps"]) - 1]
+        last.update(args=changed.args, why=changed.why, status="pending", output="", data=None, item_results={},
+                    error="", finished=None)
+    for s in new[len(job["steps"]):]:  # an added step reads the last one's output
+        n = len(job["steps"])
+        job["steps"].append(_new_step(n, s, _risk(registry, s.skill), {n - 1}, [n - 1]))
+    job["adjustments"] = job.get("adjustments", 0) + 1
+    _save(job)
+    _event(job, "adjusted", unmet=unmet, plan=[s["skill"] for s in job["steps"]])
+    return True
+
+
+def _learn(job: dict) -> None:
+    """Autonomous jobs that succeeded keep their working plan (and what came out), as autonomous mode does."""
+    from . import agent
+    from .agent import Step
+
+    steps = [Step(s["clause"], s["skill"], dict(s["args"]), s["foreach"], list(s["items"]), s["why"])
+             for s in job["steps"]]
+    repaired = job.get("adjustments") or any(len(s.get("tried", [])) > 1 for s in job["steps"])
+    if (repaired or len(steps) >= 2) and not job.get("learned_plan"):
+        job["learned"] = agent.learn(job["goal"], steps, "repaired" if repaired else "")
+    from .memory import Memory
+
+    Memory().add(f"Goal {job['goal'][:120]!r} on {job['created'][:10]}: {job['result']['output'][:240]}",
+                 source="agent", kind="outcome")
+
+
 def create(goal: str, registry, name: str = "", autonomous: bool = False, permissions: dict | None = None,
            **limits) -> dict:
     """Plan ``goal`` and store it as a new job (not started yet). Raises ValueError if it can't be planned,
@@ -256,14 +318,13 @@ def create(goal: str, registry, name: str = "", autonomous: bool = False, permis
             needs.add(last_change)  # nothing runs ahead of an earlier change
         if risk != "read":
             last_change = i
-        steps.append({"n": i, "clause": s.clause, "skill": s.skill, "risk": risk, "args": s.args,
-                      "foreach": s.foreach, "items": list(s.items), "why": s.why, "needs": sorted(needs), "inputs": inputs, "untrusted": False,
-                      "status": "pending", "attempts": 0, "started": None, "finished": None,
-                      "output": "", "data": None, "item_results": {}, "error": "", "tried": [s.skill]})
+        steps.append(_new_step(i, s, risk, needs, inputs))
     job_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
     os.makedirs(_dir(job_id))
     job = {"id": job_id, "goal": goal, "name": name, "created": _now(), "updated": None, "status": "queued",
-           "waiting": None, "limits": lim, "permissions": perms, "steps": steps, "approvals": [], "seconds": 0.0, "result": None}
+           "waiting": None, "limits": lim, "permissions": perms, "steps": steps, "approvals": [], "seconds": 0.0,
+           "result": None, "autonomous": bool(autonomous), "adjustments": 0,
+           "learned_plan": bool(p.steps) and p.steps[0].why.startswith("learned procedure")}
     _save(job)
     _event(job, "created", steps=[f"{s['n'] + 1}. {s['skill']} (needs {[x + 1 for x in s['needs']] or 'nothing'})"
                                   for s in steps])
@@ -602,8 +663,13 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
             ready = [s for s in job["steps"] if s["status"] == "pending"
                      and all(job["steps"][d]["status"] == "done" for d in s["needs"])]
             if not ready:
+                if _adjust_job(job, registry):
+                    continue
                 job["seconds"] = round(spent + time.time() - t0, 2)
                 _finish(job)
+                if job.get("autonomous") and job["status"] == "done":
+                    _learn(job)
+                    _save(job)
                 return job
             if time.time() - t0 > float(job["limits"]["max_seconds"]):
                 job["seconds"] = round(spent + time.time() - t0, 2)

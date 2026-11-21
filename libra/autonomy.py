@@ -21,6 +21,10 @@ There is no large language model behind this (Libra's own model is too small to 
 reliably), so the "thinking" is rule-based. It is good at goals made of your skills; it
 won't invent new approaches. It always stops at the step, time and iteration limits, and
 any skill that would change something still goes through the trust rules.
+
+This loop is what ``libra agent auto`` runs in a terminal, explaining each thought. Saved autonomous goals
+and the app run as durable jobs instead (:mod:`libra.jobs`), which reuse its plan repair, alternatives,
+checks and adjustments, and add crash safety, approvals and per-goal permissions.
 """
 from __future__ import annotations
 
