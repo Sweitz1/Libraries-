@@ -4,6 +4,9 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+### Documentation
+- **INSTALL.md**: an eight-lesson course for installing Libra's servers and apps (your computer, a rehearsal of the Debian installer, the service, Tailscale, the home-screen and Android apps, pairing, OpenAI-compatible apps, the Java client, Discord, upkeep and troubleshooting). `tests/test_learn.py` keeps its links, commands and installer options real.
+
 ### Security
 - Web fetches ignore `HTTP(S)_PROXY` unless `LIBRA_USE_PROXY=1` marks the proxy as trusted. Through an untrusted proxy, a name only the proxy could resolve (an internal host) got past the private-address check. Even with a trusted proxy, names that don't resolve locally are refused.
 - `libra data --url` and `--gutenberg` downloads now use the guarded fetcher (they had no private-address check); `libra data --allow-private` covers them.
@@ -18,6 +21,7 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - **The web app signs in with an HttpOnly session cookie** instead of keeping a token in page storage (`POST /v1/session`, `/v1/session/logout`). Changes need the app's CSRF header and origin. Sessions end at sign-out, after 30 days, when the device is revoked, or when the main token changes. A token saved by an older version is moved into the cookie and deleted. Bearer tokens are unchanged for scripts and apps.
 
 ### Fixed
+- A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
 - A sign-in link opened in a tab that already showed the app was ignored (only the `#fragment` changed).
 - Job event journals are synced to disk, and a line torn by a crash no longer stops `libra jobs` from reading the history.
 

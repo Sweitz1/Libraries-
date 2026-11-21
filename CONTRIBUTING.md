@@ -51,7 +51,7 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 | `/how` · `/why` | Read-only: trace what the code does now (entry point, path, state on disk), and recover why it's built this way (git history, review responses, tests), with each finding labelled fact, inference or unknown |
 | `/release X.Y.Z` | Cuts a release. You start it yourself: Claude never starts it on its own |
 
-**New to the code?** [LEARN.md](LEARN.md) is a guided path: eight lessons in dependency order, from the autograd engine to durable jobs, each with an exercise and a quiz. `tests/test_learn.py` keeps it accurate: if you rename a function, a file or a command it mentions, that test fails, so update the course in the same change.
+**New to the code?** [LEARN.md](LEARN.md) is a guided path: eight lessons in dependency order, from the autograd engine to durable jobs, each with an exercise and a quiz. `tests/test_learn.py` keeps it accurate: if you rename a function, a file or a command it mentions, that test fails, so update the course in the same change. The same test checks [INSTALL.md](INSTALL.md), the install course, including the installer options it names.
 
 Starting points: [`templates/`](templates) has a plugin, an evaluation suite and a training config to copy. [`docs/REVIEW.md`](docs/REVIEW.md) maps every part of the code.
 

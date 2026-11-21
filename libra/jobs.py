@@ -49,6 +49,7 @@ except ImportError:  # pragma: no cover - Windows
 FINAL = ("done", "failed", "cancelled", "needs_review")
 DEFAULT_LIMITS = {"max_attempts": 3, "max_items": 5, "max_seconds": 600, "max_steps": 12}
 OUTPUT_CHARS = 20000
+LOCK_WAIT = 2.0  # seconds a runner or an owner decision waits for a job's lock before giving up
 
 
 class JobError(Exception):
@@ -150,7 +151,18 @@ class _Lock:
         self.path = os.path.join(_dir(job_id), "lock")
         self.fd = None
 
-    def acquire(self) -> bool:
+    def acquire(self, wait: float = 0.0) -> bool:
+        """Take the lock, retrying for up to ``wait`` seconds. A runner holds it for the whole run, so a
+        short wait only rides out brief holders (``is_running`` probes it, for example when the jobs are
+        listed); it never lets a second runner in."""
+        deadline = time.time() + wait
+        while not self._try():
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.05)
+        return True
+
+    def _try(self) -> bool:
         self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         if fcntl is None:  # pragma: no cover - no tested lock here: refuse rather than risk two runners
             os.close(self.fd)
@@ -174,7 +186,7 @@ class _Lock:
             self.fd = None
 
     def __enter__(self):
-        if not self.acquire():
+        if not self.acquire(LOCK_WAIT):
             raise JobError("the job is running in another process")
         return self
 
@@ -548,7 +560,7 @@ def _finish(job: dict) -> None:
 def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
     """Run (or resume) a job until it finishes, waits for approval, is cancelled or hits its time limit."""
     lock = _Lock(job_id)
-    if not lock.acquire():
+    if not lock.acquire(LOCK_WAIT):
         raise JobError(f"job {job_id} is already running in another process")
     try:
         job = get(job_id)

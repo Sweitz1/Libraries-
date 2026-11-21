@@ -21,7 +21,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 178 Python test functions in 26 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
+- **Tests:** 183 Python test functions in 26 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -214,7 +214,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_websocket.py`](../tests/test_websocket.py) | 3 | Frames, fragmentation, pings, close codes, bad handshakes |
 | [`test_discord.py`](../tests/test_discord.py) | 2 | A full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
 | [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
-| [`test_jobs.py`](../tests/test_jobs.py) | 23 | Changes checked by their effect (passed, failed, unknown, a crashing check); a crash during a change reconciled, not repeated; reconcile "no" runs it again under the trust rules; stable duplicate-safe keys; `remember` checks the memory file; Approvals bound to the exact operation (stale, changed, pre-0.16, over HTTP); continuing after a time limit doesn't approve a change; Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs), including across several steps; a failed read step never falls back to a change; two runners on one job; a torn event line; durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
+| [`test_jobs.py`](../tests/test_jobs.py) | 24 | Checking whether a job runs never stops it starting; Changes checked by their effect (passed, failed, unknown, a crashing check); a crash during a change reconciled, not repeated; reconcile "no" runs it again under the trust rules; stable duplicate-safe keys; `remember` checks the memory file; Approvals bound to the exact operation (stale, changed, pre-0.16, over HTTP); continuing after a time limit doesn't approve a change; Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs), including across several steps; a failed read step never falls back to a change; two runners on one job; a torn event line; durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
 | [`test_eval.py`](../tests/test_eval.py) | 3 | Planner suite scoring, likelihood scoring on a trained model, history deltas, the behaviour gate rejecting a model |
 | [`test_mobile.py`](../tests/test_mobile.py) | 4 | What the Android app relies on: the `libra://pair` link, one token in both links, the last training decision, the web app's hooks |
 | [`android/app/src/test`](../android/app/src/test/java/ai/libra/app) | 6 (JVM) | Pairing-link parsing and rejection; notification decisions (each event once, nothing on first check) |

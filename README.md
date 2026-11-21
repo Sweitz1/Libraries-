@@ -33,7 +33,7 @@ The only dependency is **NumPy**. Everything else is in this repo.
 </tr>
 </table>
 
-**More:** [Verify it](docs/VERIFY.md) (one commit, its CI results, links for a reviewer) · [Investigate it](docs/INVESTIGATE.md) (attack surface, known risks, hypotheses to test) · [Learn the code](LEARN.md) (8 lessons with quizzes) · [Java client](clients/java/README.md) · [Templates](templates) to copy · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/Sweitz1/Libraries-/releases)
+**More:** [Verify it](docs/VERIFY.md) (one commit, its CI results, links for a reviewer) · [Investigate it](docs/INVESTIGATE.md) (attack surface, known risks, hypotheses to test) · [Install it](INSTALL.md) (servers and apps, 8 lessons) · [Learn the code](LEARN.md) (8 lessons with quizzes) · [Java client](clients/java/README.md) · [Templates](templates) to copy · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/Sweitz1/Libraries-/releases)
 
 For a reviewer's map of every app, server, service and capability, with links to the code, see **[docs/REVIEW.md](docs/REVIEW.md)**.
 
@@ -96,7 +96,7 @@ cd Libraries-
 pip install -e .          # or just: pip install numpy, then use "python -m libra"
 ```
 
-Python 3.9+. Each [release](https://github.com/Sweitz1/Libraries-/releases) also has a ready-made wheel (`pip install libra_lm-*.whl`), the Android app (`libra.apk`) and `SHA256SUMS` to check them against.
+Python 3.9+. **New to this?** [INSTALL.md](INSTALL.md) is a step-by-step course: your computer, the Debian service, Tailscale, the phone apps and other clients. Each [release](https://github.com/Sweitz1/Libraries-/releases) also has a ready-made wheel (`pip install libra_lm-*.whl`), the Android app (`libra.apk`) and `SHA256SUMS` to check them against.
 
 ## Minimum resources
 

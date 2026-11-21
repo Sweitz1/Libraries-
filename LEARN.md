@@ -5,7 +5,7 @@ parts depend on each other. Each one points at the real files and functions, has
 you run, and ends with a quiz whose answers come from the code. Allow about two hours for all of it,
 or take one lesson at a time.
 
-You need a checkout with `pip install -e .`. The exercises use a throwaway `LIBRA_HOME`, so they
+You need a checkout with `pip install -e .` ([INSTALL.md](INSTALL.md) lesson 2). The exercises use a throwaway `LIBRA_HOME`, so they
 never touch your real settings:
 
 ```bash
