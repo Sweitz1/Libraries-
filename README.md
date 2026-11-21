@@ -21,8 +21,9 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/mcp.py` | MCP client (stdio and Streamable HTTP) that syncs server tools into the catalog |
 | `libra/openapi.py`, `libra/yamlish.py` | OpenAPI/Swagger importer and caller; a small YAML reader for specs |
 | `libra/trust.py` | Risk levels, allow/ask/deny rules, confirmation prompts, audit log |
+| `libra/translate.py`, `libra/lang.py` | Translation memory, IBM Model 1 alignment, adaptation, glossing, pivoting; language detection and romanization |
 | `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
-| `libra/cli.py` | `libra data / train / generate / chat / serve / kb / skill / mcp / api / trust / scrape / crawl / info` |
+| `libra/cli.py` | `libra data / train / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -179,6 +180,7 @@ Built-in skills:
 | `crawl` | Same-site crawl that obeys robots.txt and waits between requests; optional `out=pages.jsonl` |
 | `links` | Links on a page, optionally filtered |
 | `calc` | Exact arithmetic. It parses the expression and never executes code |
+| `translate`, `detect_language`, `romanize` | Translation from your own data, language detection, Latin transliteration (see *Translation*) |
 | `time` | Local date and time |
 
 ### Writing a plugin
@@ -201,6 +203,76 @@ libra serve --plugins my_plugins/ --auto-skills
 ```
 
 Plugins in `~/.libra/plugins/` load automatically. Return a string, or a dict or list (shown as JSON). Mark read-only skills with `risk="read"`. The default is `"write"`, which asks before running. To fetch web pages, use `libra.skills.fetcher()` so `--allow-private` applies. See `plugins/example_tools.py`. **Plugins run with your permissions, so only load code you trust.**
+
+## Translation and language tools
+
+Libra translates between **any languages you have data for**, without calling an outside translation service. You bring bilingual data, and every result says how it was produced and how much to trust it.
+
+```bash
+libra translate add examples/phrasebook_en_es.tsv --src en --tgt es   # sentence pairs (translation memory)
+libra translate align --src en --tgt es                               # learn a word dictionary from them
+libra translate dict examples/dictionary_en_es.tsv --src en --tgt es  # optional: your own word list
+libra translate text "Where is the library? I have a horse." --to Spanish
+```
+```
+¿Dónde está la biblioteca? Tengo un caballo.
+
+[English → Spanish · several methods (see parts) · confidence 60%]
+note: adapted from "I have a cat." → "Tengo un gato."
+note: check Spanish gender/number agreement (articles, adjectives) after the word swap
+```
+
+In chat, or through the server's skills, just ask: "translate 'good night' to Spanish", "how do you say thank you in French?", "what is perro in English?" or "what language is this: Hej tack".
+
+### How a sentence gets translated
+
+The engines are tried in this order. The first one that works answers:
+
+| Method | When | Confidence |
+|---|---|---|
+| **Exact match** | The sentence (ignoring case and punctuation) is in your sentence pairs | 100% |
+| **Adapted match** | A very similar sentence is stored and the different words can be swapped using the dictionary. Unknown words are kept as `[word]` | 30–90% |
+| **Neural model** | You trained a Libra model on your pairs (see below) | 50% |
+| **Word-by-word gloss** | The dictionary covers most of the words. Keeps the source word order, so it's rough | ≤35% |
+| **Via English** | No direct data for, say, Spanish→French, but Spanish→English and English→French exist | product of the two |
+| **None** | No data. It says so and tells you how to add some, rather than guessing | 0% |
+
+A word swap can't fix grammatical gender. For languages with gender ("El casa" should be "La casa") the result says to check agreement.
+
+### Where the data comes from
+
+`libra translate add` reads:
+- Tatoeba exports (`id⇥sentence⇥id⇥translation`) and plain `source⇥target` TSV files
+- OPUS/Moses aligned file pairs: `libra translate add corpus.en corpus.es --src en --tgt es`
+- `.tmx` translation memories, `.jsonl` (`{"translation": {"en": …, "es": …}}` and similar), and CSV with language-named columns
+
+Good free sources are [Tatoeba](https://tatoeba.org) sentence pairs and [OPUS](https://opus.nlpl.eu) corpora; check each one's license. Pairs are de-duplicated and searched with an inverted index, so large imports stay fast. The more pairs you import, the more sentences match exactly or nearly.
+
+`libra translate align` learns a bilingual dictionary with **IBM Model 1**, a classic statistical alignment method trained by expectation-maximisation. It aligns in both directions and keeps only the word pairs both directions agree on, which removes noise such as English "I" matching Spanish "un". Your own word lists (`libra translate dict`, `word⇥translation; alternative`) always come before learned entries.
+
+### A neural translator of your own
+
+```bash
+libra translate prepare datasets/en_es --src en --tgt es --both
+libra train datasets/en_es --out checkpoints/translate_en_es --ctx 128 --steps 20000
+libra translate model checkpoints/translate_en_es --src en --tgt es
+```
+
+Once it's registered, the model handles sentences the translation memory can't match well. Exact matches from memory still come first. Quality depends entirely on how many pairs you train on: tens of thousands at the very least, and far more for fluent output.
+
+### Language detection and romanization
+
+```bash
+libra translate detect "Kissa nukkuu pöydällä eikä halua tulla alas."    # Finnish (fi): 41% …
+libra translate romanize "Привет, мир!"                                  # Privet, mir!
+```
+
+Detection uses several kinds of evidence:
+- the writing system (Cyrillic, Arabic, Han, kana, Hangul, Devanagari, Thai and about 20 more, with letter checks that separate Ukrainian from Russian and Persian from Arabic)
+- common words, letters unique to a language, and typical word endings, for about 20 Latin-script languages
+- letter-pattern profiles learned from your imported data
+
+It's reliable on full sentences (28 of 28 test sentences in 28 languages). It's weaker on one or two words, so pass `--from` when it says it's unsure. `libra translate stats` shows what data you have.
 
 ## Skill catalog: MCP servers, web APIs and trust controls
 

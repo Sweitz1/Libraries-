@@ -428,6 +428,72 @@ def cmd_trust(args) -> None:
             print(f"{args.target}: {args.action}")
 
 
+def cmd_translate(args) -> None:
+    from .lang import code_for, name, romanize
+    from .translate import Translator, read_pairs
+
+    t = Translator()
+    a, items = args.action, args.items
+
+    def lang(value, what):
+        code = code_for(value or "")
+        if not code:
+            raise SystemExit(f"give --{what} as a language name or code (e.g. en, Spanish)")
+        return code
+
+    if a == "text":
+        text = " ".join(items) if items else sys.stdin.read()
+        if not args.to:
+            raise SystemExit("usage: libra translate text \"…\" --to LANGUAGE [--from LANGUAGE]")
+        result = t.translate(text, args.to, getattr(args, "from_") or "auto")
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False) if args.json else result.describe())
+    elif a == "add":
+        if not items:
+            raise SystemExit("usage: libra translate add FILE [SECOND_FILE] --src en --tgt es")
+        src, tgt = lang(args.src, "src"), lang(args.tgt, "tgt")
+        second = items[1] if len(items) > 1 else None
+        n = t.add_pairs(read_pairs(items[0], src, tgt, second), src, tgt, os.path.basename(items[0]), log=print)
+        print(f"added {n:,} new {name(src)}–{name(tgt)} sentence pair(s); {t.pairs_for(src, tgt):,} in total")
+        print(f"next: libra translate align --src {src} --tgt {tgt}   (learn a word dictionary from them)")
+    elif a == "dict":
+        if not items:
+            raise SystemExit("usage: libra translate dict WORDLIST.tsv --src en --tgt es")
+        print(f"added {t.add_dictionary(items[0], lang(args.src, 'src'), lang(args.tgt, 'tgt')):,} dictionary entries")
+    elif a == "align":
+        src, tgt = lang(args.src, "src"), lang(args.tgt, "tgt")
+        n = t.align(src, tgt, args.max_pairs, args.iterations, log=print)
+        print(f"learned {n:,} {name(src)}→{name(tgt)} word translations (IBM Model 1, both directions agreeing)")
+    elif a == "prepare":
+        out = items[0] if items else "datasets/translate"
+        src, tgt = lang(args.src, "src"), lang(args.tgt, "tgt")
+        n = t.export_training(out, src, tgt, args.both, args.max_pairs)
+        print(f"wrote {n:,} training example(s) to {out}\n"
+              f"train:  libra train {out} --out checkpoints/translate_{src}_{tgt} --ctx 128\n"
+              f"use it: libra translate model checkpoints/translate_{src}_{tgt} --src {src} --tgt {tgt}")
+    elif a == "model":
+        src, tgt = lang(args.src, "src"), lang(args.tgt, "tgt")
+        path = items[0] if items else None
+        if path and not os.path.exists(os.path.join(path, "model.npz")):
+            raise SystemExit(f"no trained model in {path}")
+        t.set_model(src, tgt, path)
+        print(f"{name(src)}→{name(tgt)} model: {path or '(removed)'}")
+    elif a == "detect":
+        text = " ".join(items)
+        for code, conf in t.detect(text)[:5]:
+            print(f"{name(code)} ({code}): {round(conf * 100)}%")
+    elif a == "romanize":
+        print(romanize(" ".join(items)))
+    else:
+        st = t.stats()
+        print("sentence pairs:" if st["pairs"] else "no sentence pairs yet (libra translate add FILE --src en --tgt es)")
+        for la, lb, n in st["pairs"]:
+            print(f"  {name(la)}–{name(lb)}: {n:,}")
+        for src, tgt, origin, n in st["dictionary"]:
+            print(f"dictionary {name(src)}→{name(tgt)} ({'your list' if origin == 'user' else 'learned'}): {n:,} entries")
+        for src, tgt, path in st["models"]:
+            print(f"model {name(src)}→{name(tgt)}: {path}")
+
+
 def cmd_scrape(args) -> None:
     from .web import Fetcher, scrape, to_markdown
 
@@ -608,6 +674,19 @@ def build_parser() -> argparse.ArgumentParser:
     kb.add_argument("--no-clarify", action="store_true", help="never ask a clarifying question first")
     kb.add_argument("--json", action="store_true", help="ask: print status, text, citations and questions as JSON")
     kb.set_defaults(func=cmd_kb)
+
+    tl = sub.add_parser("translate", help="translate between languages using your own data; detect languages")
+    tl.add_argument("action", choices=["text", "add", "dict", "align", "prepare", "model", "detect", "romanize", "stats"])
+    tl.add_argument("items", nargs="*", help="text, or file path(s), depending on the action")
+    tl.add_argument("--to", help="text: target language")
+    tl.add_argument("--from", dest="from_", help="text: source language (default: detect)")
+    tl.add_argument("--src", help="add/dict/align/prepare/model: source language")
+    tl.add_argument("--tgt", help="add/dict/align/prepare/model: target language")
+    tl.add_argument("--both", action="store_true", help="prepare: include both directions")
+    tl.add_argument("--max-pairs", type=int, default=50000, help="align/prepare: sentence pairs to use")
+    tl.add_argument("--iterations", type=int, default=6, help="align: EM iterations")
+    tl.add_argument("--json", action="store_true", help="text: print the full result as JSON")
+    tl.set_defaults(func=cmd_translate)
 
     w = sub.add_parser("scrape", help="extract text, tables, links or CSS-selected elements from a web page")
     w.add_argument("url")

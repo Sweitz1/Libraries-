@@ -384,6 +384,36 @@ def _route_time(message: str):
     return None
 
 
+_TRANSLATE_RES = [
+    re.compile(r"^\s*(?:please\s+)?translate\s+(?P<q>.+?)\s+(?:from\s+(?P<src>[^\W\d_][\w-]*)\s+)?(?:to|into)\s+"
+               r"(?P<tgt>[^\W\d_][\w -]*?)\s*[.?!]*\s*$", re.I | re.S),
+    re.compile(r"^\s*how\s+(?:do|would|can)\s+(?:you|i|we)\s+say\s+(?P<q>.+?)\s+in\s+(?P<tgt>[^\W\d_][\w-]*)\s*\??\s*$",
+               re.I | re.S),
+    re.compile(r"^\s*what(?:'s| is)\s+(?P<q>.+?)\s+in\s+(?P<tgt>[^\W\d_][\w-]*)\s*\??\s*$", re.I | re.S),
+]
+
+
+def _route_translate(message: str):
+    from .lang import code_for
+
+    for rx in _TRANSLATE_RES:
+        m = rx.match(message)
+        if m and code_for(m.group("tgt")):
+            q = m.group("q").strip().strip("\"'“”‘’«»")
+            args = {"text": q, "to": m.group("tgt").strip()}
+            src = m.groupdict().get("src")
+            if src and code_for(src):
+                args["source"] = src
+            return args
+    return None
+
+
+def _route_detect(message: str):
+    m = re.match(r"^\s*(?:what|which)\s+language\s+is\s+(?:this|that|it)?\s*[:\-]?\s*(?P<q>.+?)\s*\??\s*$",
+                 message, re.I | re.S)
+    return {"text": m.group("q").strip("\"'“”")} if m and m.group("q") else None
+
+
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
         ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow,
         ast.USub: operator.neg, ast.UAdd: operator.pos}
@@ -476,6 +506,33 @@ def _register_builtins(reg: SkillRegistry) -> None:
         if isinstance(value, float) and value.is_integer() and abs(value) < 1e15:
             value = int(value)
         return f"{expression.strip()} = {value}"
+
+    @reg.skill("translate", "Translate text between languages using your translation memory, dictionaries and "
+               "translation models (libra translate add …).",
+               {"text": "what to translate", "to": "target language (name or code)",
+                "source": "source language, or auto to detect"}, router=_route_translate, risk="read")
+    def translate(text: str, to: str, source: str = "auto"):
+        from .translate import Translator
+
+        result = Translator().translate(text, to, source)
+        return SkillResult("translate", result.method != "none", result.describe(), result.to_dict())
+
+    @reg.skill("detect_language", "Say which language a text is written in.", {"text": "the text"},
+               router=_route_detect, risk="read")
+    def detect_language(text: str):
+        from .lang import name
+        from .translate import Translator
+
+        guesses = Translator().detect(text)
+        if not guesses:
+            return "I can't tell: the text has no letters."
+        return "\n".join(f"{name(code)} ({code}): {round(conf * 100)}%" for code, conf in guesses[:4])
+
+    @reg.skill("romanize", "Write Cyrillic or Greek text in Latin letters.", {"text": "the text"}, risk="read")
+    def romanize(text: str):
+        from .lang import romanize as rz
+
+        return rz(text)
 
     @reg.skill("time", "Current local date and time.", router=_route_time, risk="read")
     def time_skill():

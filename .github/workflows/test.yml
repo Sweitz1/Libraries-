@@ -29,3 +29,6 @@ jobs:
           libra skill find echo
           libra skill run mcp.fake.echo hello
           libra trust list
+          libra translate add examples/phrasebook_en_es.tsv --src en --tgt es
+          libra translate align --src en --tgt es
+          libra translate text "Where is the hotel?" --to es
