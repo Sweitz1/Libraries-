@@ -829,11 +829,13 @@ def cmd_discord(args) -> None:
         discord.save_config(cfg)
         print("allowed users: " + (", ".join(cfg["allowed_users"]) or "none"))
     elif a == "set":
-        if len(items) < 2 or items[0] not in ("prefix", "dm", "channels", "listen_channels", "notify_channel"):
-            raise SystemExit("usage: libra discord set prefix|dm|channels|listen_channels|notify_channel VALUE "
-                             "(channel lists: comma-separated IDs, or '' for none)")
+        keys = ("prefix", "dm", "channels", "listen_channels", "notify_channel", "message_content")
+        if len(items) < 2 or items[0] not in keys:
+            raise SystemExit("usage: libra discord set prefix|dm|channels|listen_channels|notify_channel|message_content "
+                             "VALUE (channel lists: comma-separated IDs, or '' for none; message_content: on after "
+                             "enabling the Message Content intent in the developer portal)")
         key, value = items[0], " ".join(items[1:])
-        if key == "dm":
+        if key in ("dm", "message_content"):
             cfg[key] = value.lower() in ("1", "true", "yes", "on")
         elif key in ("channels", "listen_channels"):
             cfg[key] = [v.strip() for v in value.split(",") if v.strip()]

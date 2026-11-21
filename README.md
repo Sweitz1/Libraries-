@@ -409,7 +409,7 @@ libra discord allow <your user ID>  # who may give goals and change memory
 libra discord run --workspace ~/my-workspace
 ```
 
-On the Debian service, add `--discord` to the installer instead; the bot then starts at boot. Talk to it by @mentioning it, in a DM, or with the `!` prefix:
+On the Debian service, add `--discord` to the installer instead; the bot then starts at boot. In a server, talk to it by **@mentioning** it (`@Libra ask …`). In a DM, just type. The `!` prefix (`!ask …`) works in DMs, but in a server only once the Message Content intent is on (below):
 
 | Command | |
 |---|---|
@@ -423,7 +423,7 @@ On the Debian service, add `--discord` to the installer instead; the bot then st
 
 How it behaves:
 - **No ports to open.** The bot connects out to Discord's gateway, using a WebSocket client written from scratch here, and reconnects and resumes by itself.
-- **It only reads messages meant for it:** mentions, DMs, and messages starting with the prefix. That needs no privileged intent. To have it read *every* message in some channels, set `libra discord set listen_channels <id,…>` and enable *Message Content Intent* on the bot's page in the developer portal.
+- **It only reads messages meant for it:** @mentions and DMs, which need no privileged intent. Discord sends a bot **empty text** for every other server message, so `!` commands in a server are silently ignored until you enable *Message Content Intent* on the bot's page in the developer portal and run `libra discord set message_content on`. The bot's `help` and its log say which mode it's in. To have it read *every* message in some channels, also set `libra discord set listen_channels <id,…>`.
 - **The allow list.** Only users on it can start goals, run saved goals or change memory. Everyone else can ask questions, translate and use read-only skills.
 - **No approvals in Discord.** Skills that change something are refused there (allow them with `libra trust` if you want the bot to use them).
 - **It never pings anyone**, because replies are sent with mentions disabled. Long replies are split to fit Discord's limit, and rate limits are respected.

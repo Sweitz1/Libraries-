@@ -5,10 +5,11 @@
     libra discord run --workspace ~/ws     # connect (the Debian service does this for you)
 
 The bot connects *out* to Discord's gateway, so nothing is opened on your network.
-By default it only reads messages that mention it, direct messages, and messages that
-start with the prefix (``!``). That needs no privileged intent. Set ``"listen_channels"``
-(and enable the *Message Content* intent in the developer portal) to have it read every
-message in particular channels.
+By default it answers direct messages and messages in a server that @mention it, which needs no
+privileged intent. Without Discord's *Message Content* intent, Discord sends a bot **empty text** for any
+other server message, so the ``!`` prefix only works in a server after you enable that intent on the
+bot's page in the developer portal and run ``libra discord set message_content on``. With
+``"listen_channels"`` it reads every message in those channels (that needs the intent too).
 
 Commands (after a mention, in a DM, or with the prefix):
 
@@ -52,7 +53,8 @@ INVITE_PERMISSIONS = (1 << 6) | (1 << 10) | (1 << 11) | (1 << 16)  # add reactio
 FATAL_CLOSE = {4004: "the bot token was rejected", 4010: "invalid shard", 4011: "sharding required",
                4012: "invalid API version", 4013: "invalid intents",
                4014: "a privileged intent isn't enabled: turn on 'Message Content Intent' in the Discord developer "
-                     "portal (Bot page), or remove listen_channels"}
+                     "portal (Bot page), or turn off message_content and listen_channels "
+                     "(libra discord set message_content off; libra discord set listen_channels '')"}
 USER_AGENT = "DiscordBot (libra, 0.10)"
 DEFAULT_CONFIG = {"prefix": "!", "dm": True, "allowed_users": [], "channels": [], "listen_channels": [],
                   "notify_channel": ""}
@@ -195,6 +197,7 @@ class Bot:
         self.gateway = gateway
         self.log = log or (lambda *a: None)
         self.user_id = None
+        self.username = None
         self.session_id = None
         self.resume_url = None
         self.seq = None
@@ -208,7 +211,12 @@ class Bot:
     @property
     def intents(self) -> int:
         n = GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES
-        return n | MESSAGE_CONTENT if self.cfg.get("listen_channels") else n
+        return n | MESSAGE_CONTENT if self.cfg.get("listen_channels") or self.cfg.get("message_content") else n
+
+    @property
+    def reads_server_text(self) -> bool:
+        """Whether Discord sends this bot the text of server messages that don't mention it."""
+        return bool(self.intents & MESSAGE_CONTENT)
 
     def stop(self) -> None:
         self._stop.set()
@@ -304,9 +312,14 @@ class Bot:
     def _dispatch(self, event: str, d: dict) -> None:
         if event == "READY":
             self.user_id = d["user"]["id"]
+            self.username = d["user"].get("username")
             self.session_id = d.get("session_id")
             self.resume_url = d.get("resume_gateway_url")
             self.log(f"[discord] connected as {d['user'].get('username')} ({self.user_id})")
+            if not self.reads_server_text:
+                self.log("[discord] in servers it answers @mentions only: Discord hides the text of other messages, "
+                         "including '" + (self.cfg.get("prefix") or "!") + "' commands, unless the Message Content "
+                         "intent is on (enable it in the developer portal, then: libra discord set message_content on)")
         elif event == "MESSAGE_CREATE":
             threading.Thread(target=self._on_message, args=(d,), daemon=True).start()
 
@@ -376,7 +389,10 @@ class Bot:
         cmd, rest = word.lower(), rest.strip()
         need = "Only users on the bot's allow list can do that (the owner runs: libra discord allow <your user ID>)."
         if cmd in ("", "help"):
-            return HELP.format(p=self.cfg.get("prefix") or "")
+            # In a server without Message Content, commands only arrive with an @mention: say so.
+            p = self.cfg.get("prefix") or ""
+            return HELP.format(p=p) if self.reads_server_text else \
+                HELP.format(p="@" + (self.username or "Libra") + " ") + SERVER_NOTE.format(p=p)
         if cmd == "ask":
             if self.workspace is None:
                 return "No files are connected to this bot (start it with --workspace)."
@@ -465,6 +481,9 @@ class Bot:
                 pass
         return "\n".join(lines)
 
+
+SERVER_NOTE = """
+In direct messages you can leave out the mention. (The `{p}` prefix works in servers once the owner turns on Discord's Message Content intent.)"""
 
 HELP = """**Libra** — your own assistant, running on your machine.
 `{p}ask <question>` — answer from your files, with sources
