@@ -47,6 +47,8 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 | `/deploy user@server [version]` | Upgrades your Debian server with the installer, checks it came up, and rolls back if not (`scripts/deploy.sh`, with `--dry-run` and documented exit codes). You start it yourself, and it runs in its own context |
 | `/roll-dice` | The guide's example, with a fair dice-notation script (`2d6`, `3d8+4`): a small skill with `scripts/` and `references/` |
 | `/libra-data` | Validates configs, suites, trust rules, goals and plugins (`scripts/validate.sh`), and turns notes and chat exports into a training dataset (`scripts/process.py`) |
+| `/yagni` · `/reducer` | Keep new changes minimal (plan, failing test first, nothing extra), and remove moving parts from existing code without changing behaviour (a behaviour ledger, then reversible slices). Inspired by [mintuz/skills](https://github.com/mintuz/skills), written for Libra |
+| `/how` · `/why` | Read-only: trace what the code does now (entry point, path, state on disk), and recover why it's built this way (git history, review responses, tests), with each finding labelled fact, inference or unknown |
 | `/release X.Y.Z` | Cuts a release. You start it yourself: Claude never starts it on its own |
 
 Starting points: [`templates/`](templates) has a plugin, an evaluation suite and a training config to copy. [`docs/REVIEW.md`](docs/REVIEW.md) maps every part of the code.
