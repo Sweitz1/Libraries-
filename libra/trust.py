@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import re
 
 from . import home
@@ -129,6 +130,49 @@ class Policy:
             return decision, f"rule for {target}"
         risk = risk if risk in RISKS else "write"
         return self.defaults[risk], f"default for {risk} skills"
+
+
+# ------------------------------------------------------------------ plugins
+# A plugin is Python code that runs with your permissions as soon as it loads, so nothing here can stop a
+# malicious one (only an isolated process could). What this does stop is believing a plugin's own labels:
+# until you accept the exact content of its file, its "read" skills are treated as changes (they ask, and
+# are never retried or re-run blindly) and its output counts as outside content.
+PLUGINS_FILE = "plugins.json"
+
+
+def plugin_digest(data: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(data).hexdigest()
+
+
+def accepted_plugins() -> dict:
+    """{absolute path: sha256 of the content you accepted}."""
+    return dict(home.read_json(PLUGINS_FILE, {}).get("accepted", {}))
+
+
+def plugin_accepted(path: str, digest: str) -> bool:
+    return accepted_plugins().get(os.path.abspath(path)) == digest
+
+
+def accept_plugin(path: str) -> str:
+    """Accept this plugin file as it is now. Editing it afterwards needs a new acceptance."""
+    path = os.path.abspath(os.path.expanduser(path))
+    with open(path, "rb") as f:
+        digest = plugin_digest(f.read())
+    accepted = accepted_plugins()
+    accepted[path] = digest
+    home.write_json(PLUGINS_FILE, {"accepted": accepted})
+    return digest
+
+
+def forget_plugin(path: str) -> bool:
+    path = os.path.abspath(os.path.expanduser(path))
+    accepted = accepted_plugins()
+    if accepted.pop(path, None) is None:
+        return False
+    home.write_json(PLUGINS_FILE, {"accepted": accepted})
+    return True
 
 
 def audit(name: str, args: dict, decision: str, ok: bool | None, source: str = "") -> None:

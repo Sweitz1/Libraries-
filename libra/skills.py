@@ -55,6 +55,7 @@ class Skill:
     # For skills that change something (see libra.jobs). Both are read-only checks, never another change:
     verify: Callable | None = None  # (args, SkillResult) -> True / False / None (can't tell): did it take effect?
     reconcile: Callable | None = None  # (args) -> True / False / None: after a crash, had it already happened?
+    claimed_risk: str | None = None  # a plugin's own "read" label, set aside until you accept the plugin
 
     @property
     def untrusted_output(self) -> bool:
@@ -332,6 +333,10 @@ class SkillRegistry:
         return loaded
 
     def _load_file(self, file: str, log) -> list[str]:
+        from .trust import plugin_accepted, plugin_digest
+
+        with open(file, "rb") as f:
+            digest = plugin_digest(f.read())  # the content that is about to run
         before = set(self._skills)
         mod_name = "libra_plugin_" + re.sub(r"\W", "_", os.path.splitext(os.path.basename(file))[0])
         spec = importlib.util.spec_from_file_location(mod_name, file)
@@ -347,10 +352,20 @@ class SkillRegistry:
         finally:
             _target = previous
         new = sorted(set(self._skills) - before)
+        reviewed = plugin_accepted(file, digest)
+        claims = []
         for name in new:
-            self._skills[name].source = file
+            s = self._skills[name]
+            s.source = file
+            if not reviewed:  # its labels are its own say-so until you accept this exact file
+                if s.risk == "read":
+                    s.claimed_risk, s.risk = "read", "write"
+                    claims.append(name)
+                s.external = True
         if log:
-            log(f"plugin {os.path.basename(file)}: {', '.join(new) or 'no skills'}")
+            log(f"plugin {os.path.basename(file)}: {', '.join(new) or 'no skills'}"
+                + (f" (not accepted yet, so {', '.join(claims)} will ask before running; after reading the file: "
+                   f"libra trust accept-plugin {file})" if claims else ""))
         return new
 
 

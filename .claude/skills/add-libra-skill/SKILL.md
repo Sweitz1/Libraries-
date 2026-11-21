@@ -20,7 +20,7 @@ argument-hint: "[what the skill should do]"
 ## Where it goes
 
 - **Generally useful, and fits the rules:** a built-in in `_register_builtins` in `libra/skills.py`, using `@reg.skill(name, description, params, router=…, risk=…)`.
-- **Specific to one person or service:** a plugin. Copy `templates/plugin.py` into `plugins/` or `~/.libra/plugins/`.
+- **Specific to one person or service:** a plugin. Copy `templates/plugin.py` into `plugins/` or `~/.libra/plugins/`. Its `risk="read"` labels only count once the owner runs `libra trust accept-plugin FILE` (until then its skills ask, and their output is outside content), so tell the user to read and accept it.
 - **An existing MCP server or OpenAPI spec:** no code needed. Use `libra mcp add …` or `libra api add …`.
 
 The **router** is optional. `router(message) -> dict | None` recognises a chat message or goal step and fills the arguments. Without one, the planner matches by name and description words, accepting a match only if they cover at least half the step's key words. Write the description in the words people use.
