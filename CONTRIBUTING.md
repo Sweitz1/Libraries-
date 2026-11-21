@@ -34,14 +34,18 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 - Update the README or `docs/` when behaviour changes, and add a line to `CHANGELOG.md` under *Unreleased*.
 - Open a pull request; the template lists what reviewers check. CI must be green.
 
-**Working with Claude Code?** The repository has project skills in [`.claude/skills/`](.claude/skills):
+**Working with Claude Code?** The repository has project skills in [`.claude/skills/`](.claude/skills). To write your own, start from [`templates/claude-skill/`](templates/claude-skill/SKILL.md):
 
 | Skill | For |
 |---|---|
-| `/verify` | Runs the checks for the parts you changed. Claude also runs it before each commit |
+| `/verify` | Runs the checks for the parts you changed (`bash .claude/skills/verify/scripts/verify.sh`, also usable without Claude; `--help` for options). Claude also runs it before each commit |
 | `/run-libra` | Starts a server and drives the app in a headless browser |
 | `/add-libra-skill` | Adds a Libra skill the right way: risk, outside content, tests, planner suite |
 | `/answer-review` | Works through a code review point by point and records the response in `docs/REVIEW.md` |
+| `/summarize-changes` | Summarizes uncommitted changes and flags risks, for a commit message or a quick review |
+| `api-conventions` | Not run as a command: Claude follows it when writing or changing API endpoints and clients (paths, the error format, status codes, limits, auth and trust) |
+| `/deploy user@server [version]` | Upgrades your Debian server with the installer, checks it came up, and rolls back if not (`scripts/deploy.sh`, with `--dry-run` and documented exit codes). You start it yourself, and it runs in its own context |
+| `/roll-dice` | The guide's example, with a fair dice-notation script (`2d6`, `3d8+4`): a small skill with `scripts/` and `references/` |
 | `/release X.Y.Z` | Cuts a release. You start it yourself: Claude never starts it on its own |
 
 Starting points: [`templates/`](templates) has a plugin, an evaluation suite and a training config to copy. [`docs/REVIEW.md`](docs/REVIEW.md) maps every part of the code.
