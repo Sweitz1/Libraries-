@@ -88,6 +88,14 @@ def link(base: str, token: str | None) -> str:
     return f"{base}/#token={token}" if token else f"{base}/"
 
 
+def app_link(base: str, token: str | None) -> str:
+    """The same sign-in for the Libra Android app: scanning it with the phone's camera opens the app."""
+    from urllib.parse import quote
+
+    url = f"libra://pair?base={quote(base.rstrip('/'), safe='')}"
+    return url + (f"&token={quote(token, safe='')}" if token else "")
+
+
 def qr_svg(text: str) -> str:
     return qr.to_svg(qr.encode(text))
 

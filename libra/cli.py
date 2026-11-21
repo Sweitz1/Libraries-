@@ -891,12 +891,14 @@ def cmd_pair(args) -> None:
         token, record = devices.create(args.name or "", created_by="owner")
         print(f"New device token '{record['name']}' (#{record['id']}); revoke it with: libra devices revoke "
               f"{record['id']}\n")
-    best = pair.link(bases[0][1], token)
-    print(f"Scan with your phone's camera ({bases[0][0]}):\n")
+    make = pair.app_link if args.app else pair.link
+    best = make(bases[0][1], token)
+    what = "the Libra Android app" if args.app else "the app in the phone's browser"
+    print(f"Scan with your phone's camera to open {what} ({bases[0][0]}):\n")
     print(pair.qr_terminal(best))
     print(f"\n  {best}")
     for label, base in bases[1:]:
-        print(f"  {pair.link(base, token)}   ({label})")
+        print(f"  {make(base, token)}   ({label})")
     if not token:
         print("\n(no token found: these links work only if the server runs with --no-auth)")
 
@@ -1176,6 +1178,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--token-file", help="token file (default: LIBRA_TOKEN or ~/.libra/server-token)")
     pr.add_argument("--local-only", action="store_true", help="only offer the Tailscale HTTPS address")
     pr.add_argument("--name", help="a name for the new device, e.g. 'Ana's phone'")
+    pr.add_argument("--app", action="store_true", help="a code for the Libra Android app instead of the browser")
     pr.add_argument("--main-token", action="store_true",
                     help="put the server's main token in the link instead of a new device token")
     pr.set_defaults(func=cmd_pair)

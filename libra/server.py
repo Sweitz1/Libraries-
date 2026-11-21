@@ -311,7 +311,7 @@ def make_handler(engine: Engine):
             from urllib.parse import urlsplit
 
             from . import devices
-            from .pair import link, qr_svg
+            from .pair import app_link, link, qr_svg
 
             parts = urlsplit(str(body.get("base") or ""))
             if parts.scheme not in ("http", "https") or not parts.netloc or parts.path not in ("", "/"):
@@ -322,7 +322,8 @@ def make_handler(engine: Engine):
                 token, record = devices.create(str(body.get("name") or ""),
                                                created_by=getattr(self, "principal", "owner"))
             url = link(f"{parts.scheme}://{parts.netloc}", token)
-            self._json(200, {"url": url, "svg": qr_svg(url), "device": {k: v for k, v in (record or {}).items()
+            app_url = app_link(f"{parts.scheme}://{parts.netloc}", token)
+            self._json(200, {"url": url, "svg": qr_svg(url), "app_url": app_url, "app_svg": qr_svg(app_url), "device": {k: v for k, v in (record or {}).items()
                                                                        if k != "hash"}})
 
         def _revoke(self, device_id: str) -> None:
@@ -568,7 +569,12 @@ def make_handler(engine: Engine):
                     running = running or auto.is_running(engine.auto_config)  # e.g. the nightly timer's run
                 except Exception:
                     pass
-                self._json(200, {"running": running, "status": text, "last": engine.auto_last, "progress": prog})
+                try:
+                    latest = auto.last_run(engine.auto_config)
+                except Exception:
+                    latest = {}
+                self._json(200, {"running": running, "status": text, "last": engine.auto_last, "progress": prog,
+                                 "last_run": latest})
             elif path == "/v1/skills":
                 from urllib.parse import parse_qs, urlsplit
 

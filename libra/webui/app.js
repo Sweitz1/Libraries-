@@ -17,9 +17,16 @@ let info = null;
 let mode = "files";
 const chats = { files: [], model: [] };
 
+// Inside the Libra Android app (its WebView adds "LibraAndroid" to the user agent).
+const IN_APP = /LibraAndroid/.test(navigator.userAgent);
+// A tab to open first (#tab=agent), e.g. from a notification.
+const START_TAB = (location.hash.match(/tab=([a-z]+)/) || [])[1] || "chat";
+let pairResult = null;
+
 // A token in the link (#token=...) is taken once, then removed from the address bar.
 (function readTokenFromLink() {
   const m = location.hash.match(/token=([^&]+)/);
+  if (location.hash && !m) window.history.replaceState(null, "", location.pathname);
   if (m) {
     token = decodeURIComponent(m[1]);
     store.set("libra-token", token);
@@ -74,7 +81,11 @@ $("login-btn").addEventListener("click", () => {
   start();
 });
 $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") $("login-btn").click(); });
-$("logout").addEventListener("click", () => { store.del("libra-token"); token = null; showLogin(""); });
+$("logout").addEventListener("click", () => {
+  store.del("libra-token"); token = null;
+  if (IN_APP) { location.href = "libra://signout"; return; }  // the app forgets its saved sign-in too
+  showLogin("");
+});
 
 // ----------------------------------------------------------------- tabs
 function showTab(name) {
@@ -399,16 +410,23 @@ $("pair-btn").addEventListener("click", async () => {
   $("composer").hidden = true;
   $("pair-qr").removeAttribute("src");
   $("pair-link").textContent = "";
+  pairResult = null;
   loadDevices();
 });
 $("pair-new").addEventListener("click", async () => {
   try {
-    const r = await json("/v1/pair", { base: location.origin, name: $("pair-name").value.trim() });
-    $("pair-qr").src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(r.svg);
-    $("pair-link").textContent = r.url;
+    pairResult = await json("/v1/pair", { base: location.origin, name: $("pair-name").value.trim() });
+    showPairCode();
     loadDevices();
   } catch (e) { $("pair-link").textContent = "Error: " + e.message; }
 });
+function showPairCode() {
+  if (!pairResult) return;
+  const app = $("pair-app").checked && pairResult.app_svg;
+  $("pair-qr").src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(app ? pairResult.app_svg : pairResult.svg);
+  $("pair-link").textContent = app ? pairResult.app_url : pairResult.url;
+}
+$("pair-app").addEventListener("change", showPairCode);
 async function loadDevices() {
   const list = $("pair-devices"); list.textContent = "";
   let r;
@@ -455,7 +473,20 @@ async function start() {
   mode = info.workspace ? "files" : "model";
   if (!info.workspace && !info.model) $("chat-empty").textContent = "No model or files yet. Translation, skills and calculations still work here.";
   else if (!info.workspace) $("chat-empty").textContent = `Chat with your ${info.model_parameters.toLocaleString()}-parameter model.`;
-  showTab("chat");
+  offerAndroidApp();
+  const tab = document.querySelector(`nav button[data-tab="${START_TAB}"]`);
+  showTab(tab && !tab.hidden ? START_TAB : "chat");
+}
+
+// On an Android phone's browser, offer to open the same sign-in in the Libra app (if it's installed).
+function offerAndroidApp() {
+  if (IN_APP || !/Android/i.test(navigator.userAgent) || !token || store.get("libra-app-offer") === "no") return;
+  const link = `libra://pair?base=${encodeURIComponent(location.origin)}&token=${encodeURIComponent(token)}`;
+  const bar = el("div", { class: "card", id: "app-offer", style: "margin:8px 12px" },
+    el("span", { text: "Have the Libra Android app? " }),
+    el("a", { href: link, text: "Open it there" }), " · ",
+    el("a", { href: "#", text: "No thanks", onclick: (e) => { e.preventDefault(); store.set("libra-app-offer", "no"); bar.remove(); } }));
+  document.querySelector("main").prepend(bar);
 }
 
 start();

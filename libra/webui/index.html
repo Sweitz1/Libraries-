@@ -172,6 +172,8 @@
       <h2 style="margin-top:0">Add another device</h2>
       <p class="muted">Each device gets its own sign-in, which you can revoke on its own.</p>
       <div class="row"><input id="pair-name" placeholder="name, e.g. Ana's phone"><button class="btn" id="pair-new" style="flex:0 0 auto">New QR code</button></div>
+      <label style="display:flex;gap:8px;align-items:center;justify-content:center;color:var(--text)"><input type="checkbox" id="pair-app" style="width:auto">
+        For the Libra Android app</label>
       <p class="muted">Scan it with the other device's camera. It opens Libra already signed in.</p>
       <img id="pair-qr" alt="QR code with the sign-in link" style="width:min(280px,80%);image-rendering:pixelated;border-radius:8px">
       <p class="out muted" id="pair-link" style="word-break:break-all"></p>

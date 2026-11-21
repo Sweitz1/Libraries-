@@ -812,6 +812,21 @@ def rollback(config_path: str) -> str:
     return model_dir
 
 
+def last_run(config_path: str) -> dict:
+    """The latest finished run's time and decision (from any trigger: the timer, the app, the terminal)."""
+    cfg = load_config(config_path)
+    path = os.path.join(cfg["dataset"], ".auto", "runs.jsonl")
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = [l for l in f if l.strip()]
+    except OSError:
+        return {}
+    if not lines:
+        return {}
+    rec = json.loads(lines[-1])
+    return {"finished": rec.get("finished", ""), "decision": rec.get("decision", "")}
+
+
 def status(config_path: str) -> str:
     cfg = load_config(config_path)
     path = os.path.join(cfg["dataset"], ".auto", "last-report.md")
