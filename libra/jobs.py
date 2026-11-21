@@ -47,7 +47,7 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None
 
 FINAL = ("done", "failed", "cancelled", "needs_review")
-DEFAULT_LIMITS = {"max_attempts": 3, "max_items": 5, "max_seconds": 600, "max_steps": 12}
+DEFAULT_LIMITS = {"max_attempts": 3, "max_items": 5, "max_seconds": 600, "max_steps": 12, "max_call_seconds": 300}
 MAX_ADJUSTMENTS = 2  # an autonomous job may change its own plan this many times to meet the goal
 OUTPUT_CHARS = 20000
 LOCK_WAIT = 2.0  # seconds a runner or an owner decision waits for a job's lock before giving up
@@ -505,24 +505,72 @@ def _jsonable(data):
     return data if len(text) <= 200_000 else None
 
 
-def _call(registry, skill: str, args: dict, risk: str, attempts: int, retry_delay: float, job, step,
-          approved: bool = False, item: str | None = None):
-    from .autonomy import TRANSIENT
+class _CallStopped(Exception):
+    """A skill call didn't finish in time, or the job was cancelled while it ran. Python can't stop a
+    thread, so the call is left behind: a read is simply abandoned, but a change may still complete."""
+
+    def __init__(self, why: str):
+        super().__init__(why)
+        self.why = why
+
+
+def _bounded(registry, skill: str, args: dict, approved: bool, key, seconds: float, cancelled):
+    """``registry.run`` in a worker thread, waited on for at most ``seconds``, or until the job is cancelled."""
+    import threading
+
     from .skills import _call as current
 
+    box = {}
+
+    def work():
+        current.key = key  # the idempotency key is per thread: set it in the thread that runs the skill
+        try:
+            box["result"] = registry.run(skill, args, approved=approved)
+        except BaseException as exc:  # pragma: no cover - registry.run already turns errors into results
+            box["error"] = exc
+        finally:
+            current.key = None
+
+    worker = threading.Thread(target=work, name=f"libra-skill-{skill}", daemon=True)
+    worker.start()
+    deadline = time.monotonic() + max(0.0, float(seconds))
+    while worker.is_alive():
+        worker.join(timeout=min(0.25, max(0.0, deadline - time.monotonic())) or 0.01)
+        if not worker.is_alive():
+            break
+        if cancelled():
+            raise _CallStopped("the job was cancelled while the call was running")
+        if time.monotonic() >= deadline:
+            raise _CallStopped(f"the call didn't finish within {seconds:g}s")
+    if "error" in box:  # pragma: no cover
+        raise box["error"]
+    return box["result"]
+
+
+def _call(registry, skill: str, args: dict, risk: str, attempts: int, retry_delay: float, job, step,
+          approved: bool = False, item: str | None = None, cancelled=lambda: False):
+    """Run one call, with retries for transient errors on reads. Raises _CallStopped when a call hangs past
+    ``max_call_seconds`` or the job is cancelled meanwhile (the caller decides what that means)."""
+    from .autonomy import TRANSIENT
+    from .skills import SkillResult
+
+    seconds = float(job["limits"].get("max_call_seconds", DEFAULT_LIMITS["max_call_seconds"]))
+    key = _idem_key(job, step, item) if risk != "read" else None
     r = None
-    if risk != "read":
-        current.key = _idem_key(job, step, item)
-    try:
-        for k in range(attempts if risk == "read" else 1):
-            if k:
-                time.sleep(retry_delay * (2 ** (k - 1)))
-                _event(job, "retry", step=step["n"] + 1, attempt=k + 1, after=r.text[:200])
-            r = registry.run(skill, args, approved=approved)
-            if r.ok or not TRANSIENT.search(r.text or ""):
-                break
-    finally:
-        current.key = None
+    for k in range(attempts if risk == "read" else 1):
+        if k:
+            time.sleep(retry_delay * (2 ** (k - 1)))
+            _event(job, "retry", step=step["n"] + 1, attempt=k + 1, after=r.text[:200])
+        try:
+            r = _bounded(registry, skill, args, approved, key, seconds, cancelled)
+        except _CallStopped as stop:
+            _event(job, "call abandoned", step=step["n"] + 1, skill=skill, item=item, why=stop.why)
+            if risk != "read" or cancelled():
+                raise
+            # a stuck read isn't retried (that would only leave more calls hanging); alternatives may follow
+            return SkillResult(skill, False, f"{skill} stopped: {stop.why}")
+        if r.ok or not TRANSIENT.search(r.text or ""):
+            break
     if risk != "read" and r.ok:
         _effect(registry, step, args, r, item)
     return r
@@ -554,8 +602,11 @@ def _run_step(job: dict, step: dict, registry, retry_delay: float, cancelled, ap
             if cancelled():
                 step["status"] = "pending"
                 return "cancelled"
-            r = _call(registry, step["skill"], _subst(step["args"], prev_text, item), step["risk"], attempts,
-                      retry_delay, job, step, approved, item)
+            try:
+                r = _call(registry, step["skill"], _subst(step["args"], prev_text, item), step["risk"], attempts,
+                          retry_delay, job, step, approved, item, cancelled)
+            except _CallStopped as stop:
+                return _stopped(job, step, stop, item, cancelled)
             if not r.ok and _blocked(r.text):
                 step["status"], step["error"] = "failed", r.text
                 return "failed"
@@ -571,14 +622,33 @@ def _run_step(job: dict, step: dict, registry, retry_delay: float, cancelled, ap
             return "failed"
         step["error"] = f"{failed} of {len(items)} item(s) failed" if failed else ""
     else:
-        r = _call(registry, step["skill"], _subst(step["args"], prev_text), step["risk"], attempts, retry_delay,
-                  job, step, approved)
+        try:
+            r = _call(registry, step["skill"], _subst(step["args"], prev_text), step["risk"], attempts, retry_delay,
+                      job, step, approved, None, cancelled)
+        except _CallStopped as stop:
+            return _stopped(job, step, stop, None, cancelled)
         if not r.ok or EMPTY.match(r.text or ""):
             step["status"], step["error"] = "failed", (r.text or "no output")[:2000]
             return "failed"
         step["output"], step["data"] = (r.text or "")[:OUTPUT_CHARS], _jsonable(r.data)
     step["status"], step["finished"] = "done", _now()
     return "done"
+
+
+def _stopped(job: dict, step: dict, stop: _CallStopped, item, cancelled) -> str:
+    """A call was abandoned. Cancelled: the job stops (a change may still complete in the background).
+    A change that hung: nobody knows whether it happened, so a person decides, exactly as after a crash."""
+    step["status"] = "pending"
+    if cancelled():
+        if step["risk"] != "read":
+            _event(job, "warning", step=step["n"] + 1,
+                   text="cancelled during a change that may still complete in the background")
+        return "cancelled"
+    _wait(job, step, "interrupted",
+          f"step {step['n'] + 1} ({step['skill']}) changes something and {stop.why}"
+          + (f" (item {item!r})" if item else "") + "; it may still complete, or may already have taken "
+          "effect. Check, then approve to run it again or skip it.")
+    return "waiting"
 
 
 def _try_alternatives(job: dict, step: dict, registry, retry_delay: float, cancelled) -> str:
@@ -739,6 +809,10 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
                 _use_approval(job, step["n"], digest)
             step["operation"] = digest  # what was dispatched; _run_step saves it before the skill is called
             outcome = _run_step(job, step, registry, retry_delay, cancelled, approved)
+            if outcome == "waiting":  # a change hung: _stopped saved the job as waiting for a person
+                return job
+            if outcome == "cancelled":
+                continue  # the check at the top of the loop records it
             if outcome == "failed":
                 outcome = _try_alternatives(job, step, registry, retry_delay, cancelled)
             if outcome == "done":  # taint travels with the data
