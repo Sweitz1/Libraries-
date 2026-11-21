@@ -7,6 +7,18 @@ allowed-tools: Read Grep
 
 Your skill instructions here...
 
+## Available scripts
+
+- **`scripts/example.sh`**: greets NAME (an example of an agent-friendly script). `--json` for structured output, `--help` for usage
+
+## Workflow
+
+1. Run the script:
+   ```bash
+   bash scripts/example.sh --json "$NAME"
+   ```
+2. Exit code `2` means the arguments were wrong. The error says what was expected.
+
 <!--
 A starter for a Claude Code skill (https://code.claude.com/docs/en/skills).
 Layout (only SKILL.md is required):
