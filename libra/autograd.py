@@ -7,13 +7,18 @@ from __future__ import annotations
 
 import contextlib
 import math
+import threading
 
 import numpy as np
 
 from . import backend as B
 
-_grad_enabled = True
+_state = threading.local()  # gradient recording is on or off per thread, never process-wide
 _rng = np.random.default_rng()
+
+
+def grad_enabled() -> bool:
+    return getattr(_state, "enabled", True)
 
 
 def seed(value: int) -> None:
@@ -30,14 +35,15 @@ def rng() -> np.random.Generator:
 
 @contextlib.contextmanager
 def no_grad():
-    """Disable graph recording (inference, evaluation)."""
-    global _grad_enabled
-    prev = _grad_enabled
-    _grad_enabled = False
+    """Disable graph recording (inference, evaluation) in the current thread only.
+
+    Other threads, e.g. a training run while the server answers requests, are unaffected."""
+    prev = grad_enabled()
+    _state.enabled = False
     try:
         yield
     finally:
-        _grad_enabled = prev
+        _state.enabled = prev
 
 
 def _as_array(x):
@@ -100,7 +106,7 @@ class Tensor:
     @staticmethod
     def _make(data, parents, backward) -> "Tensor":
         out = Tensor(data)
-        if _grad_enabled and any(p.requires_grad for p in parents):
+        if grad_enabled() and any(p.requires_grad for p in parents):
             out.requires_grad = True
             out._prev = tuple(p for p in parents if p.requires_grad)
             out._backward = backward

@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import checkpoint
+
 TEMPLATE = {
     "name": "my-model",
     "enabled": True,
@@ -672,13 +674,13 @@ def run(config_path: str, dry_run: bool = False, log=print) -> Report:
             report.decision = "dry run: nothing written or trained"
         elif not has_train or not holdout:
             report.decision = "not enough data to train yet"
-        elif not new_train and os.path.exists(os.path.join(model_dir, "model.npz")):
+        elif not new_train and checkpoint.exists(model_dir):
             report.decision = ("no new text since the last run; model unchanged" if not new_holdout else
                                "the new documents all went to the held-out test set; model unchanged")
         else:
             report.trained = True
             _train_and_gate(cfg, train_dir, holdout, model_dir, report, t0, log, prog)
-        if os.path.exists(os.path.join(model_dir, "model.npz")):
+        if checkpoint.exists(model_dir):
             report.sample = _sample(model_dir)
     except Exception as exc:  # recorded and reported, then raised so the service shows it failed
         failure = exc
@@ -705,12 +707,11 @@ def _train_and_gate(cfg, train_dir, holdout, model_dir, report: Report, t0: floa
     mc = cfg["model_config"]
     candidate = model_dir.rstrip("/") + ".candidate"
     shutil.rmtree(candidate, ignore_errors=True)
-    exists = os.path.exists(os.path.join(model_dir, "model.npz"))
+    exists = checkpoint.exists(model_dir)
     start = 0
     if exists:
         shutil.copytree(model_dir, candidate)
-        with open(os.path.join(model_dir, "config.json"), encoding="utf-8") as f:
-            start = int(json.load(f).get("meta", {}).get("step", 0))
+        start = int(checkpoint.read_meta(model_dir).get("step", 0))
     remaining = cfg["limits"]["max_minutes"] * 60 - (time.time() - t0)
     if remaining < 30:
         report.decision = "time limit reached before training"
@@ -737,8 +738,7 @@ def _train_and_gate(cfg, train_dir, holdout, model_dir, report: Report, t0: floa
         report.decision = f"training failed, current model unchanged: {exc}"
         report.errors.append(str(exc))
         return
-    with open(os.path.join(candidate, "config.json"), encoding="utf-8") as f:
-        report.steps = int(json.load(f)["meta"].get("step", 0)) - start
+    report.steps = int(checkpoint.read_meta(candidate).get("step", 0)) - start
     if prog:
         prog.update(phase="scoring")
     report.new_loss = holdout_loss(candidate, holdout)

@@ -110,11 +110,11 @@ def train(cfg: TrainConfig, log=print, progress=None) -> GPT:
     log(f"corpus: {len(text):,} characters")
 
     tok_path = os.path.join(cfg.out, "tokenizer.json")
-    resuming = cfg.resume and os.path.exists(os.path.join(cfg.out, "model.npz"))
+    resuming = cfg.resume and checkpoint.exists(cfg.out)
     if resuming:
         model, tokenizer, meta = checkpoint.load(cfg.out)
         start_step = int(meta.get("step", 0))
-        best_val = float(meta.get("best_val", float("inf")))
+        best_val = float(meta.get("best_val") if meta.get("best_val") is not None else float("inf"))
         log(f"resuming from {cfg.out} at step {start_step}")
     else:
         t0 = time.time()
@@ -130,8 +130,10 @@ def train(cfg: TrainConfig, log=print, progress=None) -> GPT:
     train_ids, val_ids = ids[: len(ids) - n_val], ids[len(ids) - n_val :]
     if len(train_ids) < block + 2:
         raise ValueError(f"not enough text: {len(train_ids)} tokens for block size {block}; add data or lower --ctx")
-    if len(val_ids) < block + 2:
-        log("validation split too small; evaluating on training data")
+    has_holdout = len(val_ids) >= block + 2
+    if not has_holdout:
+        log("not enough text for a held-out validation split: reporting training loss, and no 'best' checkpoint "
+            "is chosen (add more text for a real validation loss)")
         val_ids = train_ids
 
     if model is None:
@@ -169,12 +171,18 @@ def train(cfg: TrainConfig, log=print, progress=None) -> GPT:
         last = step == cfg.steps - 1 or out_of_time
         if (cfg.eval_every and step > 0 and step % cfg.eval_every == 0) or last:
             val = estimate_loss(model, val_ids, cfg, rng)
-            meta = {"step": step + 1, "val_loss": val, "best_val": min(best_val, val)}
+            if has_holdout:
+                meta = {"step": step + 1, "val_loss": val, "best_val": min(best_val, val)}
+            else:  # measured on text the model trains on: say so, and don't pick a "best" by it
+                meta = {"step": step + 1, "train_loss": val, "val_loss": None, "best_val": None}
             checkpoint.save(cfg.out, model, tokenizer, meta, opt)
-            if val < best_val:
+            if has_holdout and val < best_val:
                 best_val = val
                 checkpoint.save(os.path.join(cfg.out, "best"), model, tokenizer, meta)
-            log(f"eval  {step:5d} | val loss {val:.4f} | best {best_val:.4f} | saved {cfg.out}")
+            if has_holdout:
+                log(f"eval  {step:5d} | val loss {val:.4f} | best {best_val:.4f} | saved {cfg.out}")
+            else:
+                log(f"eval  {step:5d} | train loss {val:.4f} (no held-out split) | saved {cfg.out}")
             sample = generate(model, tokenizer, cfg.sample_prompt,
                               SamplingParams(max_tokens=60, temperature=0.8, seed=step))
             log("sample: " + sample.replace("\n", " ")[:200])

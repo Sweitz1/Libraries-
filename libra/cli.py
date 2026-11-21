@@ -244,7 +244,7 @@ def cmd_serve(args) -> None:
     print(f"device: {B.use(args.device)}")
     ws = _workspace(args)
     model = tok = None
-    if os.path.exists(os.path.join(args.model, "model.npz")):
+    if checkpoint.exists(args.model):
         model, tok, _ = checkpoint.load(args.model)
     elif ws is None:
         print(f"note: no trained model in {args.model}; the app works for files, translation and skills, "
@@ -514,7 +514,7 @@ def cmd_translate(args) -> None:
     elif a == "model":
         src, tgt = lang(args.src, "src"), lang(args.tgt, "tgt")
         path = items[0] if items else None
-        if path and not os.path.exists(os.path.join(path, "model.npz")):
+        if path and not checkpoint.exists(path):
             raise SystemExit(f"no trained model in {path}")
         t.set_model(src, tgt, path)
         print(f"{name(src)}→{name(tgt)} model: {path or '(removed)'}")
@@ -721,7 +721,7 @@ def cmd_discord(args) -> None:
         token = discord.read_token(args.token_file)
         ws = _workspace(args)
         model = tok = None
-        if args.model and os.path.exists(os.path.join(args.model, "model.npz")):
+        if args.model and checkpoint.exists(args.model):
             model, tok, _ = checkpoint.load(args.model)
         bot = discord.Bot(token, _registry(args, interactive=False), workspace=ws, model=model, tokenizer=tok,
                           auto_config=args.auto_config)  # reads ~/.libra/discord.json and follows changes

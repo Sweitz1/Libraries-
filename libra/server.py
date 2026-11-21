@@ -15,6 +15,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -58,7 +59,7 @@ class Engine:
         self._hits_lock = threading.Lock()
         self.auto_config = auto_config
         self.model_dir: str | None = None  # set to reload the model when a new one is trained
-        self._model_mtime = 0.0
+        self._model_version: str | None = None
         self.auto_thread: threading.Thread | None = None
         self.agent_thread: threading.Thread | None = None
         self.agent_current: dict = {}
@@ -88,28 +89,26 @@ class Engine:
         return 0.0
 
     def watch_model(self, model_dir: str) -> None:
-        """Reload the model whenever ``model_dir/model.npz`` changes (e.g. after a nightly training run)."""
+        """Reload the model whenever a new checkpoint is published in ``model_dir`` (e.g. by nightly training)."""
+        from . import checkpoint
+
         self.model_dir = model_dir
-        path = os.path.join(model_dir, "model.npz")
-        self._model_mtime = os.path.getmtime(path) if self.model is not None and os.path.exists(path) else 0.0
+        self._model_version = checkpoint.version(model_dir) if self.model is not None else None
 
     def maybe_reload(self) -> None:
         if not self.model_dir:
             return
-        path = os.path.join(self.model_dir, "model.npz")
-        try:
-            mtime = os.path.getmtime(path)
-        except OSError:
-            return
-        if mtime == self._model_mtime:
-            return
         from . import checkpoint
 
+        current = checkpoint.version(self.model_dir)  # changes only when a whole checkpoint is published
+        if current is None or current == self._model_version:
+            return
         with self.lock:
-            if mtime != self._model_mtime:
+            if current != self._model_version:
                 try:
-                    self.model, self.tokenizer, _ = checkpoint.load(self.model_dir)
-                    self._model_mtime = mtime
+                    model, tokenizer, _ = checkpoint.load(self.model_dir)
+                    self.model, self.tokenizer = model, tokenizer  # requests in flight keep their snapshot
+                    self._model_version = current
                     print(f"[server] loaded the updated model from {self.model_dir}")
                 except Exception as exc:  # half-written or broken: keep the old one, try again next time
                     print(f"[server] could not load {self.model_dir}: {exc}")
@@ -375,12 +374,27 @@ def make_handler(engine: Engine):
                 return
 
             def work():
-                from . import auto
+                # A separate process: training never shares interpreter state (gradient mode, memory,
+                # the GIL) with the requests this server is answering.
+                import subprocess
+                import sys
 
+                cmd = [sys.executable, "-m", "libra", "auto", "run", engine.auto_config, "--quiet"]
+                if dry_run:
+                    cmd.append("--dry-run")
+                env = dict(os.environ)  # run the same libra as this server, installed or from a source checkout
+                pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                env["PYTHONPATH"] = os.pathsep.join(p for p in (pkg_root, env.get("PYTHONPATH", "")) if p)
                 try:
-                    report = auto.run(engine.auto_config, dry_run=dry_run, log=None)
-                    engine.auto_last = {"ok": True, "decision": report.decision,
-                                        "report": report.markdown(auto.load_config(engine.auto_config))}
+                    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(engine.auto_config),
+                                          env=env, timeout=24 * 3600)
+                    report = proc.stdout.strip()
+                    found = re.findall(r"\*\*(?:decision: )?(.+?)\*\*", report)
+                    if proc.returncode == 0:
+                        engine.auto_last = {"ok": True, "decision": found[-1] if found else "finished", "report": report}
+                    else:
+                        tail = (proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["exit code %d" % proc.returncode]
+                        engine.auto_last = {"ok": False, "decision": f"run failed: {tail[0]}", "report": report}
                 except Exception as exc:  # reported to the app instead of killing the server
                     engine.auto_last = {"ok": False, "decision": f"run failed: {exc}", "report": ""}
 

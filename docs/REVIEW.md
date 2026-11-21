@@ -19,7 +19,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 117 test functions in 18 files under [`tests/`](../tests).
+- **Tests:** 123 test functions in 20 files under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -205,6 +205,8 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_qr.py`](../tests/test_qr.py) | 2 | QR structure; independent OpenCV decoding (in CI) |
 | [`test_websocket.py`](../tests/test_websocket.py) | 3 | Frames, fragmentation, pings, close codes, bad handshakes |
 | [`test_discord.py`](../tests/test_discord.py) | 2 | A full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
+| [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
+| [`test_isolation.py`](../tests/test_isolation.py) | 6 | Fixes from the second review (section 10): per-thread gradients, atomic checkpoints, honest validation |
 
 The end-to-end CLI checks are in [`.github/smoke.sh`](../.github/smoke.sh), and CI is defined in [`.github/workflows/test.yml`](../.github/workflows/test.yml). The phone app was also exercised by hand with Playwright (iPhone 13 profile): login, chat, translate, skills, agent, autonomous mode, training progress, pairing (the on-screen QR code decoded with OpenCV), dark mode, no horizontal overflow and no console errors.
 
@@ -273,3 +275,15 @@ The first external review was a static review of commit `d62c146`. Each of its f
 - **A device token in browser storage** can still be read by script running in the app's origin. CSP `script-src 'self'` limits that, and revocation contains it.
 - **Rate limits and connection caps are per address**, so many attackers behind one NAT share a budget, and spread-out addresses aren't limited together.
 - **Not yet run for real:** a deployment on Debian with systemd, Tailscale and Discord.
+
+## 10. Response to the second external review
+
+The second review looked at commit `2bd1928`. All three findings were confirmed. The gradient bug was reproduced before it was fixed: a reply paused mid-stream left every parameter without a gradient in a training step on another thread.
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | `no_grad()` switched gradients off for the whole process, and `stream_ids()` kept it off across yields, so training in the same process lost its gradients | Gradient recording is per thread (`threading.local` in [`autograd.py`](../libra/autograd.py)). `stream_ids` holds `no_grad` only around each model call, never across a `yield`. Training started from the web app (`/v1/auto/run`) runs `libra auto run` in a **separate process** | `test_generation_in_one_thread_does_not_disable_training_in_another`, `test_no_grad_is_per_thread` |
+| 2 | `checkpoint.save()` overwrote files in place, so the reload watcher could pick up new weights with an old tokenizer | Each save writes a complete new folder (`versions/<name>.partial`, fsynced), renames it into place, then atomically replaces the `CURRENT` pointer ([`checkpoint.py`](../libra/checkpoint.py)). Readers follow the pointer, the server reloads only when the pointer changes, and an interrupted save leaves the old version current. Three versions are kept; old flat checkpoints still load and are upgraded on the next save | `test_published_as_a_unit`, `test_readers_never_see_a_mix`, `test_old_flat_checkpoints_still_load` |
+| 3 | With too little text for a holdout, training loss was reported as `val_loss` and used to choose `best/` | Without a real holdout the log says "train loss (no held-out split)", the metadata stores `train_loss` with `val_loss: null`, and no `best/` checkpoint is chosen | `test_no_holdout_reports_training_loss` |
+
+**Residual risks:** the separate training process and the server share the checkpoint folder, which is now safe for readers, but two trainers writing the same folder at once would still race (`libra auto` already holds a lock file for that). The chat CLI and `libra train` itself still run in one process, as before.

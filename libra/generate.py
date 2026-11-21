@@ -57,20 +57,20 @@ def stream_ids(model: GPT, prompt_ids: list[int], params: SamplingParams, stop_i
     block = model.config.block_size
     model.eval()
     cache = model.new_cache()
-    with no_grad():
-        pending = ids[-block:]  # tokens not yet in the cache
-        for _ in range(params.max_tokens):
-            if cache.length + len(pending) > block:
-                # Window is full: keep the most recent half of the context and re-encode it.
-                cache.reset()
-                pending = ids[-max(1, block // 2):]
+    pending = ids[-block:]  # tokens not yet in the cache
+    for _ in range(params.max_tokens):
+        if cache.length + len(pending) > block:
+            # Window is full: keep the most recent half of the context and re-encode it.
+            cache.reset()
+            pending = ids[-max(1, block // 2):]
+        with no_grad():  # only around the computation: never held across a yield
             logits = model.infer(np.array([pending], dtype=np.int64), cache)
-            nxt = sample_token(B.to_numpy(logits[0, -1]), params, rng, ids)
-            if nxt in stop:
-                return
-            ids.append(nxt)
-            pending = [nxt]
-            yield nxt
+        nxt = sample_token(B.to_numpy(logits[0, -1]), params, rng, ids)
+        if nxt in stop:
+            return
+        ids.append(nxt)
+        pending = [nxt]
+        yield nxt
 
 
 def stream_text(model: GPT, tokenizer: BPETokenizer, prompt: str, params: SamplingParams, stop_tokens=()):
