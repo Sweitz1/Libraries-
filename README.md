@@ -33,7 +33,7 @@ The only dependency is **NumPy**. Everything else is in this repo.
 </tr>
 </table>
 
-**More:** [Java client](clients/java/README.md) · [Templates](templates) to copy · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/Sweitz1/Libraries-/releases)
+**More:** [Learn the code](LEARN.md) (8 lessons with quizzes) · [Java client](clients/java/README.md) · [Templates](templates) to copy · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/Sweitz1/Libraries-/releases)
 
 For a reviewer's map of every app, server, service and capability, with links to the code, see **[docs/REVIEW.md](docs/REVIEW.md)**.
 
