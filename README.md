@@ -45,6 +45,8 @@ This installs Libra as a service. It starts at boot, runs nightly training and s
 - **Away from home:** add `--tailscale` (or `--tailscale-only`). The installer sets up Tailscale and serves Libra at `https://libra.<your-tailnet>.ts.net`.
 - **The app** has Chat (your files or the model), Translate, Skills, Agent and Training tabs, plus a *Pair* button that shows a QR code for adding your other devices. It installs to the home screen with its own icon.
 
+- **Android app:** a native app with the same screens, the sign-in in the Android Keystore, and notifications when a goal needs your approval or finishes, or when training decides on a model. Pair it with `libra pair --app`. iPhone: use the web app (Safari → *Add to Home Screen*) for now; the app's contract with the server is documented for an iOS version. See **[docs/MOBILE.md](docs/MOBILE.md)**.
+
 **[deploy/README.md](deploy/README.md)** covers the rest.
 
 <p><img src="docs/phone-chat.png" alt="Chat in the Libra app" width="260"> <img src="docs/phone-agent.png" alt="The Agent tab" width="260"></p>

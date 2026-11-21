@@ -35,7 +35,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
-            <!-- libra://pair?base=…&token=… from `libra pair --app` or the Pair screen -->
+            <!-- libra://pair?base=…&token=… from "libra pair" with the app option, or the Pair screen -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

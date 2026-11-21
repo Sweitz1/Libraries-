@@ -19,7 +19,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 138 test functions in 22 files under [`tests/`](../tests).
+- **Tests:** 142 Python test functions in 22 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -27,7 +27,8 @@ The model is used for free-form chat, and can be trained on the user's data and 
 | App | What it is | Code |
 |---|---|---|
 | **Phone/browser app** | Mobile-first web app (installable to the home screen). Tabs: Chat (your files or the model), Translate, Skills, Agent, Training, plus a Pair screen with a QR code. Token login. Light and dark themes. No external files, strict CSP, and server text is always inserted as `textContent` | [`webui/index.html`](../libra/webui/index.html), [`webui/app.js`](../libra/webui/app.js), icons and [manifest](../libra/webui/manifest.webmanifest) |
-| **Command line** (`libra`) | 19 commands: `train generate chat serve skill mcp api trust kb translate auto agent discord memory pair scrape crawl data info` | [`cli.py`](../libra/cli.py) |
+| **Android app** | A native shell, framework-only Java with no libraries, around the same web app. Pairing via `libra://pair` links (scanned links only fill the form; http needs confirmation). Token encrypted with an Android Keystore key; backups off. Locked-down WebView (no JS bridge, other origins open in the browser, no device permissions for pages). Offline screen. A read-only background check about every 15 min notifies about waiting jobs, finished goals and training decisions. Built, unit-tested and linted in CI; **not yet run on a device**. Guide and the app/server contract (for iOS later): [`MOBILE.md`](MOBILE.md) | [`android/`](../android), [`android.yml`](../.github/workflows/android.yml) |
+| **Command line** (`libra`) | 21 commands: `train generate chat serve skill mcp api trust kb translate auto agent jobs eval discord memory pair devices scrape crawl data info` | [`cli.py`](../libra/cli.py) |
 | **Terminal chat** (`libra chat`) | Chat with the model, or grounded chat with `--workspace`; `/commands` for skills, `/add` `/correct` `/rule` for files | [`cli.py`](../libra/cli.py) (`cmd_chat`) |
 | **Discord bot** (`libra discord`) | Answers mentions, DMs and `!` commands: ask, translate, goal, plan, goals, run, remember, recall, forget, skills, status, help. Has an allow list for goals and memory changes | [`discord.py`](../libra/discord.py) |
 | **Python library** | `from libra import GPT, BPETokenizer, generate, load, skill, …` | [`__init__.py`](../libra/__init__.py) |
@@ -172,7 +173,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 
 ### Pairing and remote access
 - **QR encoder** written from scratch: byte mode, versions 1–10, levels L/M/Q/H. Verified against OpenCV's two decoders for all 640 version/level/mask combinations. [`qr.py`](../libra/qr.py)
-- **Pairing:** chooses the best address (Tailscale HTTPS, then `.local`, then the LAN IP) and builds a link with `#token=` in the URL fragment. The app removes the token from the address bar after reading it. [`pair.py`](../libra/pair.py)
+- **Pairing:** chooses the best address (Tailscale HTTPS, then `.local`, then the LAN IP) and builds a link with `#token=` in the URL fragment. The app removes the token from the address bar after reading it. [`pair.py`](../libra/pair.py) `libra pair --app` and the Pair screen also make a `libra://pair?base=…&token=…` code for the Android app, carrying the same device token.
 
 ## 5. Security model (what to scrutinise)
 
@@ -212,6 +213,8 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
 | [`test_jobs.py`](../tests/test_jobs.py) | 12 | Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs); durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
 | [`test_eval.py`](../tests/test_eval.py) | 3 | Planner suite scoring, likelihood scoring on a trained model, history deltas, the behaviour gate rejecting a model |
+| [`test_mobile.py`](../tests/test_mobile.py) | 4 | What the Android app relies on: the `libra://pair` link, one token in both links, the last training decision, the web app's hooks |
+| [`android/app/src/test`](../android/app/src/test/java/ai/libra/app) | 6 (JVM) | Pairing-link parsing and rejection; notification decisions (each event once, nothing on first check) |
 | [`test_isolation.py`](../tests/test_isolation.py) | 6 | Fixes from the second review (section 10): per-thread gradients, atomic checkpoints, honest validation |
 
 The end-to-end CLI checks are in [`.github/smoke.sh`](../.github/smoke.sh), and CI is defined in [`.github/workflows/test.yml`](../.github/workflows/test.yml). The phone app was also exercised by hand with Playwright (iPhone 13 profile): login, chat, translate, skills, agent, autonomous mode, training progress, pairing (the on-screen QR code decoded with OpenCV), dark mode, no horizontal overflow and no console errors.
