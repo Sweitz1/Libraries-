@@ -29,6 +29,12 @@ Frontmatter:
   context: fork             Run it in a separate context (long logs stay out of the conversation).
   argument-hint             What to type after the command, e.g. "[version]". The text arrives as $ARGUMENTS.
 
+Scripts: refer to them by paths relative to the skill folder (bash scripts/example.sh), and list them in
+an "Available scripts" section so Claude knows they exist. Write them for an agent: no prompts, --help,
+clear errors, structured output on stdout, diagnostics on stderr, documented exit codes, --dry-run for
+changes. scripts/example.sh shows each of these. State what they need in a `compatibility` field
+(e.g. "Requires Python 3.9+").
+
 Body: plain instructions. A line like !`git status --short` runs before Claude reads the skill
 and is replaced by its output, so the instructions start from the real state.
 
