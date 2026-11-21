@@ -21,7 +21,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 174 Python test functions in 25 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
+- **Tests:** 178 Python test functions in 26 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -190,7 +190,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | Secrets | API keys only as environment-variable names; the server token in 0600/0640 files; device tokens stored only as hashes; the Discord token entered hidden, never in argv; `TS_AUTHKEY` used once; audit logs redacted at any depth (secret-named fields, `Bearer …`/`Bot …` values, well-known key formats, credentials in URLs) | [`openapi.py`](../libra/openapi.py), [`install-debian.sh`](../deploy/install-debian.sh) |
 | Calculator | AST evaluation of numbers and operators only, with an exponent cap; never `eval` | [`skills.py`](../libra/skills.py) `_eval` |
 | Discord | Reads only messages addressed to it; allow list for goals and memory changes; `allowed_mentions: {parse: []}` on every reply; write skills refused | [`discord.py`](../libra/discord.py) |
-| Web app | No `innerHTML` with server data; CSP `script-src 'self'`. The device's own token is kept in `localStorage`, taken from the URL fragment once, and revocable from the Pair screen or with `libra devices revoke` | [`app.js`](../libra/webui/app.js) |
+| Web app | No `innerHTML` with server data; CSP `script-src 'self'`. The sign-in is an HttpOnly, SameSite=Strict session cookie (nothing in page storage): a token from the URL fragment or the form is exchanged for it once. Cookie-signed-in changes need the app's header and origin. Devices are revocable from the Pair screen or with `libra devices revoke` | [`app.js`](../libra/webui/app.js) |
 | Installer (runs as root) | Fixed paths; the service user has no shell; systemd hardening; data owned by `libra`; test mode for CI | [`install-debian.sh`](../deploy/install-debian.sh) |
 | Crawled training data | robots.txt, rate limits, page and size budgets, e-mail and phone masking; licensing is left to the user (documented) | [`auto.py`](../libra/auto.py) |
 
@@ -218,6 +218,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_eval.py`](../tests/test_eval.py) | 3 | Planner suite scoring, likelihood scoring on a trained model, history deltas, the behaviour gate rejecting a model |
 | [`test_mobile.py`](../tests/test_mobile.py) | 4 | What the Android app relies on: the `libra://pair` link, one token in both links, the last training decision, the web app's hooks |
 | [`android/app/src/test`](../android/app/src/test/java/ai/libra/app) | 6 (JVM) | Pairing-link parsing and rejection; notification decisions (each event once, nothing on first check) |
+| [`test_sessions.py`](../tests/test_sessions.py) | 4 | Cookie flags; CSRF (no header, wrong origin); sign-out, device revocation and a new main token end sessions; tokens are never accepted from cookies (section 13) |
 | [`test_proxy.py`](../tests/test_proxy.py) | 3 | Environment proxies ignored unless trusted; a trusted proxy still gets only public names; dataset downloads use the guard (section 13) |
 | [`test_isolation.py`](../tests/test_isolation.py) | 6 | Fixes from the second review (section 10): per-thread gradients, atomic checkpoints, honest validation |
 
@@ -285,7 +286,7 @@ The first external review was a static review of commit `d62c146`. Each of its f
 **Residual risks**, for the next review:
 - **Proxies:** when an `HTTP(S)_PROXY` is configured for a destination, the proxy makes the connection, so only the name check applies. *(Closed in section 13: proxies are ignored unless trusted.)*
 - **MCP over HTTP and Discord's REST API** use their configured URLs directly. These are trusted configuration, often `localhost`, so they bypass the private-address guard on purpose.
-- **A device token in browser storage** can still be read by script running in the app's origin. CSP `script-src 'self'` limits that, and revocation contains it.
+- **A device token in browser storage** can still be read by script running in the app's origin. CSP `script-src 'self'` limits that, and revocation contains it. *(Closed in section 13: the web app uses an HttpOnly session cookie.)*
 - **Rate limits and connection caps are per address**, so many attackers behind one NAT share a budget, and spread-out addresses aren't limited together.
 - **Not yet run for real:** a deployment on Debian with systemd, Tailscale and Discord.
 
@@ -355,7 +356,7 @@ This review read commit `1db5559`, the one pinned in [VERIFY.md](VERIFY.md). It 
 | Durable event journal | **Partly true; fixed.** `job.json` was written atomically, but event lines weren't synced, and a torn last line made `events()` raise | Each event is flushed and `fsync`ed. A torn last line is skipped; a damaged line elsewhere shows as an `unreadable` event instead of being dropped. [`jobs.py`](../libra/jobs.py) `_event`, `events`. Test: `test_a_torn_last_event_line_is_ignored` (failed before the fix) |
 | Idempotency keys and reconciliation for outside actions | **Built** (after this section was first written). A skill's read-only `reconcile(args)` answers "had it already happened?" after a crash: yes means it's recorded as done, no means it runs again under the trust rules, and can't tell means a person decides. `idempotency_key()` gives each call of a change a key that is stable across retries and restarts | [`jobs.py`](../libra/jobs.py) `_reconcile`, `_idem_key`; [`skills.py`](../libra/skills.py) `idempotency_key`. Tests: `test_a_crash_during_a_change_is_reconciled_not_repeated` (SIGKILL mid-send: sent once, not asked), `test_reconcile_lets_a_change_that_never_happened_run_and_keys_stay_stable` |
 | Check results against evidence of the outcome, not only the output text | **Built.** A skill's read-only `verify(args, result)` checks the effect itself. `passed`/`failed`/`unknown` per call; a check that crashes counts as `unknown`. A job is `done` only if no change failed or was unknown; otherwise `needs_review`. Changes without a `verify` are listed as `not_checked` | `_effect`, `_finish` (`result.effects`). Tests: `test_a_change_is_checked_by_its_effect_not_its_reply`, `test_remember_checks_the_memory_file` |
-| **P1** HttpOnly cookie sessions instead of a token in browser storage | **Not done.** The token stays in `localStorage`, limited by CSP `script-src 'self'` and per-device revocation | It would take a `Set-Cookie` session (HttpOnly, Secure, SameSite=Strict) on sign-in, plus a CSRF check on `POST`s |
+| **P1** HttpOnly cookie sessions instead of a token in browser storage | **Built** (after this section was first written). `POST /v1/session` trades a bearer token for a random session id in an `HttpOnly; SameSite=Strict` cookie (`Secure` behind HTTPS). The app keeps nothing in page storage, and a token an older version stored is moved into the cookie, then deleted. Cookie `POST`s need `X-Libra-CSRF: 1` and a same-host `Origin`. A session ends at sign-out (on the server), after 30 days, when its device is revoked, or (owner) when the main token changes. Only hashes are stored, and a cookie never carries a token. Sessions are kept apart from devices, so signing out doesn't revoke devices paired from that browser, and the owner keeps owner rights | [`sessions.py`](../libra/sessions.py), [`server.py`](../libra/server.py) `_authorized`, `_same_site`, `_session`. Tests: [`test_sessions.py`](../tests/test_sessions.py) (4), and a browser run: migration, approve through the cookie, sign-out then reload, link sign-in |
 | **P1** Sandbox plugins and MCP servers | **Not done; by design.** They run with your permissions, which is documented in SECURITY.md | It would take a separate process per plugin with limited rights, which on Debian means systemd-run or bubblewrap |
 | **P1** Manipulating the planner through wording | Known (residual risk 6). The outside-content gate means wording inside fetched content can't trigger a change | — |
 | Hybrid semantic retrieval, adaptive replanning, procedural memory, broader evals | **Not done**, except that procedural memory exists (learned procedures, section 4) | Semantic retrieval would use from-scratch co-occurrence vectors trained on the user's own files; broader evals would add more suites to `libra eval` |
@@ -378,6 +379,8 @@ After this review came an engineering kit: a specification, a candidate patch an
 | `verified.py` | Not copied. Its digest and "legacy approvals don't count" rules are what `_operation`/`_approved` now do inside the job runner. Its equality verdict belongs with PR-016-C |
 
 **Residual risks**, for the next review:
+- **Script running in the app's origin** can no longer read the sign-in, but it can still make requests with it while the page is open. CSP `script-src 'self'` is what stops script being injected.
+- **A pairing link carries a device token** by design (that's how a phone signs in). Treat it like a password; revoke the device if a link leaks.
 - **`verify` and `reconcile` are written by the skill's author** and trusted like the skill. A check that only reads the skill's own reply proves nothing; the guidance says to look at the effect. Of the built-ins, only `remember` has them.
 - **A change without `verify` still counts toward `done`.** It's reported as `not_checked`, not hidden.
 - **A digest proves what was approved, not what the skill does with it.** A skill that ignores its arguments or misdescribes its risk is still trusted as written (PR-016-D).

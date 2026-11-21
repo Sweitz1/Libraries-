@@ -47,6 +47,7 @@ Clients rely on these codes: `clients/java` treats 0, 429 and 503 as temporary, 
 ## Auth and trust
 
 - **Every path needs the bearer token except `OPEN_PATHS`** (`/health` and the app's static files). Don't add to `OPEN_PATHS` without a reason written next to it.
+- **Browsers sign in with a session cookie** (`libra/sessions.py`): `POST /v1/session` with a bearer token sets it, and `self.via_cookie` is then true. A `POST` with the cookie needs `X-Libra-CSRF: 1` and a same-host `Origin` (`_same_site`); keep `GET`s read-only so the cookie can't be used to change anything without that check. Never accept a token from a cookie, only a session id.
 - **`self.principal` is `"owner"` or `"device:<id>"`.** Record it on anything a person decides (approvals, pairings), and limit device tokens to what their own device needs (see `_revoke`).
 - **Anything that runs a skill goes through `SkillRegistry.run`** or `libra.jobs`, never `skill.func` directly, so the trust rules, the audit log and the outside-content gate apply.
 - **No CORS headers** unless the origin is in `engine.cors_origins`.

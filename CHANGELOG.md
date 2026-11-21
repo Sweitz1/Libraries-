@@ -15,7 +15,10 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 ### Added
 - Change skills can declare a read-only `verify` (did it take effect?) and `reconcile` (after a crash, had it already happened?). A failed or inconclusive check makes the job `needs_review`; a confirmed one after a crash isn't repeated. `libra.skills.idempotency_key()` gives each change call a key that is stable across retries, for services that remove duplicates. `remember` has both checks.
 
+- **The web app signs in with an HttpOnly session cookie** instead of keeping a token in page storage (`POST /v1/session`, `/v1/session/logout`). Changes need the app's CSRF header and origin. Sessions end at sign-out, after 30 days, when the device is revoked, or when the main token changes. A token saved by an older version is moved into the cookie and deleted. Bearer tokens are unchanged for scripts and apps.
+
 ### Fixed
+- A sign-in link opened in a tab that already showed the app was ignored (only the `#fragment` changed).
 - Job event journals are synced to disk, and a line torn by a crash no longer stops `libra jobs` from reading the history.
 
 ### Tests
