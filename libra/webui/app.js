@@ -12,6 +12,8 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } },
 };
 
+// The sign-in lives in an HttpOnly cookie that this script can't read (see libra/sessions.py). A token is
+// held here only between reading it (from a link or the form) and exchanging it for that cookie.
 let token = null;
 let info = null;
 let mode = "files";
@@ -23,23 +25,35 @@ const IN_APP = /LibraAndroid/.test(navigator.userAgent);
 const START_TAB = (location.hash.match(/tab=([a-z]+)/) || [])[1] || "chat";
 let pairResult = null;
 
-// A token in the link (#token=...) is taken once, then removed from the address bar.
+// A token in the link (#token=...) is taken once, then removed from the address bar. A token an older
+// version saved in page storage is moved into the cookie the same way, then deleted.
 (function readTokenFromLink() {
   const m = location.hash.match(/token=([^&]+)/);
   if (location.hash && !m) window.history.replaceState(null, "", location.pathname);
   if (m) {
     token = decodeURIComponent(m[1]);
-    store.set("libra-token", token);
     window.history.replaceState(null, "", location.pathname);
   } else {
     token = store.get("libra-token");
   }
 })();
 
+// A sign-in link opened in a tab that already shows the app changes only the #fragment: read it too.
+window.addEventListener("hashchange", () => { if (/token=/.test(location.hash)) location.reload(); });
+
+// Exchange the token for a session cookie. Returns false if the token was wrong.
+async function signIn() {
+  if (!token) return true;
+  const res = await fetch("/v1/session", { method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", "X-Libra-CSRF": "1" }, body: "{}" });
+  if (res.status === 429) throw new Error("Too many wrong tokens. Wait a few minutes.");
+  if (!res.ok) { token = null; return false; }
+  store.del("libra-token");
+  return true;
+}
+
 async function api(path, opts = {}) {
-  const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
-  if (token) headers.Authorization = "Bearer " + token;
-  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  const headers = Object.assign({ "Content-Type": "application/json", "X-Libra-CSRF": "1" }, opts.headers || {});
+  const res = await fetch(path, Object.assign({ credentials: "same-origin" }, opts, { headers }));
   if (res.status === 401) { showLogin("That token didn't work."); throw new Error("unauthorized"); }
   if (res.status === 429) throw new Error("Too many wrong tokens. Wait a few minutes.");
   return res;
@@ -77,11 +91,12 @@ function showLogin(msg) {
 
 $("login-btn").addEventListener("click", () => {
   token = $("token").value.trim();
-  store.set("libra-token", token);
+  $("token").value = "";
   start();
 });
 $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") $("login-btn").click(); });
-$("logout").addEventListener("click", () => {
+$("logout").addEventListener("click", async () => {
+  try { await json("/v1/session/logout", {}); } catch (e) { /* signed out already */ }
   store.del("libra-token"); token = null;
   if (IN_APP) { location.href = "libra://signout"; return; }  // the app forgets its saved sign-in too
   showLogin("");
@@ -464,6 +479,7 @@ $("au-dry").addEventListener("click", () => startRun(true));
 // ---------------------------------------------------------------- start
 async function start() {
   try {
+    if (!(await signIn())) { showLogin("That token didn't work."); return; }
     info = await json("/v1/info");
   } catch (e) {
     if (e.message !== "unauthorized") { setDot("bad"); $("login").hidden = false; $("login-error").textContent = "Can't reach the server: " + e.message; }
@@ -478,6 +494,7 @@ async function start() {
   if (!info.workspace && !info.model) $("chat-empty").textContent = "No model or files yet. Translation, skills and calculations still work here.";
   else if (!info.workspace) $("chat-empty").textContent = `Chat with your ${info.model_parameters.toLocaleString()}-parameter model.`;
   offerAndroidApp();
+  token = null;  // the cookie carries the sign-in from here on
   const tab = document.querySelector(`nav button[data-tab="${START_TAB}"]`);
   showTab(tab && !tab.hidden ? START_TAB : "chat");
 }

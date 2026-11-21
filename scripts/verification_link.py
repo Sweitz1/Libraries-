@@ -172,7 +172,7 @@ def investigation_page(sha, info, date, subject):
          "Already written down, so a finding here should show a *concrete* exploit or a cheap fix:", "",
          "1. **Proxies:** ignored unless `LIBRA_USE_PROXY=1` marks one as trusted; a trusted proxy resolves names again itself, so split-horizon DNS is its responsibility.",
          "2. **MCP over HTTP and Discord's REST API** use their configured URLs directly (trusted configuration, often `localhost`).",
-         "3. **A device token in browser storage** can be read by script running in the app's origin (CSP `script-src 'self'` limits it).",
+         "3. **The web app's sign-in** is an HttpOnly session cookie: script in the app's origin can't read it, but can use it while the page is open (CSP `script-src 'self'` limits it).",
          "4. **Rate limits and connection caps are per address**: many clients behind one NAT share a budget.",
          "5. **Two trainers writing one checkpoint folder** at once would race; `libra auto` holds a lock file against it.",
          "6. **Planner and result checks are rule-based**, read from the goal's wording, and can be fooled by phrasing.",

@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
     private void setUpWebView() {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);  // the app is a JavaScript page
-        s.setDomStorageEnabled(true);  // it keeps this device's sign-in in its own storage
+        s.setDomStorageEnabled(true);  // the web app's small preferences (its sign-in is an HttpOnly cookie)
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);

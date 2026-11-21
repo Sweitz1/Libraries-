@@ -3,12 +3,13 @@
 Endpoints: GET /health, GET /v1/models, POST /v1/chat/completions,
 POST /v1/completions, GET /v1/skills, POST /v1/skills/<name>,
 POST /v1/workspace/ask|correct|rule, POST /v1/translate, GET /v1/info, GET /v1/auto/status,
-POST /v1/auto/run, and the phone/browser app at ``/``. Streaming uses server-sent events
+POST /v1/auto/run, POST /v1/session (and /v1/session/logout), and the phone/browser app at ``/``. Streaming uses server-sent events
 like the OpenAI API, so any OpenAI-compatible client (including Nexus Agent) can connect.
 
 With a token set, every endpoint except ``/health`` and the app's static files needs
 ``Authorization: Bearer <token>`` (the token doubles as the "API key" in OpenAI apps).
-Repeated wrong tokens from one address are locked out for a while.
+Repeated wrong tokens from one address are locked out for a while. The browser app instead uses an
+HttpOnly session cookie (see :mod:`libra.sessions`); a POST with it also needs ``X-Libra-CSRF: 1``.
 """
 from __future__ import annotations
 
@@ -258,19 +259,81 @@ def make_handler(engine: Engine):
                     return False
             auth = self.headers.get("Authorization", "")
             given = auth[7:].strip() if auth.lower().startswith("bearer ") else self.headers.get("X-Libra-Token", "")
+            self.via_cookie = False
             if given and hmac.compare_digest(given.encode(), engine.token.encode()):
                 self.principal = "owner"
                 return True
-            from . import devices
+            from . import devices, sessions
 
-            device = devices.verify(given)
+            device = devices.verify(given) if given else None
             if device is not None:
                 self.principal = f"device:{device['id']}"
                 return True
+            sid = None if given else self._cookie()
+            if sid:  # the web app's sign-in (see libra.sessions)
+                who = sessions.lookup(sid, sessions.owner_ref(engine.token), {d["id"] for d in devices.listing()})
+                if who is not None:
+                    if self.command == "POST" and not self._same_site():
+                        self._error(403, "refused a cross-site request (send X-Libra-CSRF: 1 from the app's own origin)")
+                        return False
+                    self.principal, self.via_cookie = who, True
+                    return True
             with engine._fails_lock:
                 engine._fails.setdefault(ip, []).append(now)
-            self._error(401, "missing or wrong token (send Authorization: Bearer <token>)")
+            self._error(401, "missing or wrong token (send Authorization: Bearer <token>)",
+                        {"Set-Cookie": self._session_cookie("", 0)} if sid else None)
             return False
+
+        def _cookie(self) -> str | None:
+            from http.cookies import CookieError, SimpleCookie
+
+            from .sessions import COOKIE
+
+            try:
+                jar = SimpleCookie(self.headers.get("Cookie") or "")
+            except CookieError:
+                return None
+            return jar[COOKIE].value if COOKIE in jar else None
+
+        def _same_site(self) -> bool:
+            """A cookie-signed-in change must come from the app itself: a custom header (which another site
+            can't add without CORS, and CORS is off unless configured) and, if the browser says where the
+            request came from, this server's own address."""
+            from urllib.parse import urlsplit
+
+            if self.headers.get("X-Libra-CSRF") != "1":
+                return False
+            origin = self.headers.get("Origin")
+            return origin is None or urlsplit(origin).netloc.lower() == (self.headers.get("Host") or "").lower()
+
+        def _session_cookie(self, sid: str, max_age: int) -> str:
+            import ssl
+
+            from .sessions import COOKIE
+
+            secure = isinstance(self.connection, ssl.SSLSocket) or \
+                (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+            return (f"{COOKIE}={sid}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict"
+                    + ("; Secure" if secure else ""))
+
+        def _session(self, action: str) -> None:
+            from . import sessions
+
+            if action == "logout":
+                if getattr(self, "via_cookie", False):
+                    sessions.end(self._cookie())
+                self._json(200, {"signed_out": True}, {"Set-Cookie": self._session_cookie("", 0)})
+                return
+            if engine.token is None:
+                self._json(200, {"session": False, "principal": "owner"})
+                return
+            if getattr(self, "via_cookie", False):
+                self._error(400, "sign in with a token (Authorization: Bearer …) to start a session")
+                return
+            sid = sessions.create(self.principal, sessions.owner_ref(engine.token),
+                                  self.headers.get("User-Agent") or "")
+            self._json(200, {"session": True, "principal": self.principal, "expires_in": sessions.MAX_AGE},
+                       {"Set-Cookie": self._session_cookie(sid, sessions.MAX_AGE)})
 
         def _static(self, path: str) -> None:
             name, ctype = STATIC[path]
@@ -651,6 +714,9 @@ def make_handler(engine: Engine):
                 return
             if path == "/v1/jobs" or path.startswith("/v1/jobs/"):
                 self._jobs_post(path[len("/v1/jobs"):].strip("/"), body)
+                return
+            if path in ("/v1/session", "/v1/session/logout"):
+                self._session("logout" if path.endswith("logout") else "start")
                 return
             if path == "/v1/pair":
                 self._pair(body)
