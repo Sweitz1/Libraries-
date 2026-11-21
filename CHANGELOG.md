@@ -29,6 +29,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - **A Claude Code plugin marketplace** (`.claude-plugin/marketplace.json`): the project skills install as one plugin with `/plugin marketplace add Sweitz1/Libraries-` and `/plugin install libra-skills@libra`. `scripts/release.sh` keeps its version in step.
 - **A `tutor` skill for Claude Code** (`/tutor <change>` or `/tutor lesson <n>`): it plans the change as small steps that you write yourself, gives hints that never give the answer, and checks each step with Libra's tests. It never edits your code. The idea comes from wanna-learn.
 
+- **Discord skills** for goals and the app, with the bot's token: `discord_history` (a channel's messages, treated as outside content), `discord_post` and `discord_react` (changes that ask first, are checked against Discord afterwards, and aren't repeated after a crash). Discord ids are checked to be numbers before they go into an API path. The invite link now includes *Add Reactions*.
+
 ### Fixed
 - A damaged job file (cut off, or not a job) was hidden from `libra jobs list` and the app, and failed with a raw JSON error; the server answered "n must be a number". It's now listed as `damaged`, with the file's path, and resuming carries on with the other jobs.
 - A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
