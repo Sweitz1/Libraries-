@@ -38,7 +38,7 @@ target="" ref="origin/main" options="" port="" dir="~/Libraries-" repo="https://
 skip_tests=0 dry=0
 SSH="${LIBRA_DEPLOY_SSH:-ssh}"
 usage() { sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
-arg() { [ -n "${2:-}" ] || { echo "Error: $1 needs a value. Run with --help." >&2; exit 2; }; }
+arg() { [ -n "${2:-}" ] || { printf 'Error: %s needs a value.\nUsage: scripts/deploy.sh --target USER@HOST [--version REF] [--options "..."] [--dry-run]   (--help for all options)\n' "$1" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --target) arg "$1" "${2:-}"; target="$2"; shift 2 ;;
@@ -53,7 +53,7 @@ while [ $# -gt 0 ]; do
     *) echo "Error: unknown argument '$1'. Run with --help for the options." >&2; exit 2 ;;
   esac
 done
-[ -n "$target" ] || { echo "Error: --target is required, e.g. --target pi@atlas.local" >&2; exit 2; }
+[ -n "$target" ] || { printf 'Error: --target is required: the server, as USER@HOST.\nUsage: scripts/deploy.sh --target pi@atlas.local --version v0.15.0 --options "--tailscale" [--dry-run]\n' >&2; exit 2; }
 [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "Error: --version must be a tag, branch or commit. Received: '$ref'" >&2; exit 2; }
 [[ "$options" =~ ^[A-Za-z0-9\ ._:=/@-]*$ ]] || { echo "Error: --options may only contain installer flags and values. Received: '$options'" >&2; exit 2; }
 if [ -z "$port" ]; then port="$(sed -n 's/.*--port[ =]\([0-9]*\).*/\1/p' <<< "$options")"; port="${port:-8000}"; fi

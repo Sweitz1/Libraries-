@@ -4,6 +4,7 @@
 #
 #   scripts/release.sh 0.16.0        prepare version 0.16.0
 #   scripts/release.sh --check       only check that the versions agree and the changelog has an entry
+# Exit codes: 0 ready, 1 a check or the tests failed, 2 invalid arguments.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -18,9 +19,11 @@ check() {
 }
 
 if [ "${1:-}" = "--check" ]; then check; exit 0; fi
-new="${1:?usage: scripts/release.sh X.Y.Z   (or --check)}"
-[[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like 1.2.3"; exit 1; }
-[ -z "$(git status --porcelain)" ] || { echo "commit or stash your changes first"; exit 1; }
+case "${1:-}" in -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; esac
+new="${1:-}"
+[ -n "$new" ] || { printf 'Error: the version is required, e.g. 0.16.0 (the current one is %s).\nUsage: scripts/release.sh X.Y.Z   (or --check, --help)\n' "$(current)" >&2; exit 2; }
+[[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf "Error: the version must look like 1.2.3. Received: '%s'\nUsage: scripts/release.sh X.Y.Z\n" "$new" >&2; exit 2; }
+[ -z "$(git status --porcelain)" ] || { echo "Error: the working tree has uncommitted changes. Commit or stash them first (git status)." >&2; exit 1; }
 
 old="$(current)"
 sed -i "s/^version = \"$old\"/version = \"$new\"/" pyproject.toml

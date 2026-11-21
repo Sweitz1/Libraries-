@@ -57,6 +57,18 @@ class VerifyScriptTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
 
 
+class ReleaseScriptTest(unittest.TestCase):
+    def test_missing_or_bad_version_explains_itself(self):
+        script = os.path.join(ROOT, "scripts", "release.sh")
+        for args in ([], ["1.2"], ["v1.2.3"]):
+            r = run("bash", script, *args)
+            self.assertEqual(r.returncode, 2, args)
+            self.assertTrue(r.stderr.startswith("Error:"), r.stderr)
+            self.assertIn("Usage: scripts/release.sh X.Y.Z", r.stderr)
+        self.assertEqual(run("bash", script, "--check").returncode, 0)
+        self.assertIn("Exit codes", run("bash", script, "--help").stdout)
+
+
 class DeployScriptTest(unittest.TestCase):
     script = os.path.join(SKILLS, "deploy", "scripts", "deploy.sh")
 
@@ -76,7 +88,9 @@ class DeployScriptTest(unittest.TestCase):
 
     def test_arguments_are_checked(self):
         self.assertIn("Exit codes", run("bash", self.script, "--help").stdout)
-        self.assertEqual(run("bash", self.script).returncode, 2)  # --target is required
+        r = run("bash", self.script)  # --target is required: an error with guidance, never a prompt
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Usage: scripts/deploy.sh --target", r.stderr)
         r = run("bash", self.script, "--target", "x", "--version", "v1;reboot", env=self.env)
         self.assertEqual(r.returncode, 2)
         self.assertIn("Received: 'v1;reboot'", r.stderr)
