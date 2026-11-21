@@ -282,6 +282,7 @@ On the Debian service, a failed run (network down, disk full) is retried up to 3
 libra eval plan                                   # does the planner pick the right skills? (28 labelled goals)
 libra eval model checkpoints/web                  # the model's behaviour on 40 multiple-choice items
 libra eval model checkpoints/web --text held.txt  # plus held-out loss and perplexity on text it never saw
+libra eval kb --suite my-questions.jsonl          # answers from your files: right, wrong, honest refusals
 libra eval history                                # every result, so a regression shows up
 ```
 
@@ -289,6 +290,8 @@ Each run is recorded in `~/.libra/eval/history.jsonl` with the checkpoint versio
 - **Held-out loss and perplexity**, on text it didn't train on.
 - **Behaviour, by likelihood.** For each item, which continuation the model finds most probable ("The cats" → " are sleeping." or " is sleeping."), scored per token so length doesn't decide. This works even for small models. The built-in suite covers agreement, tense, common phrases, simple facts, common sense and sequences, reported per tag and next to the chance level.
 - **Generation checks.** In your own suite, `{"prompt": "…", "expect": ["…"]}` requires the greedy reply to contain one of the expected strings.
+
+**Your knowledge base** is measured three ways, because they trade off: **right** (it answered, quoting the passage you expected), **wrong** (it answered from the wrong place), and **refused** (questions your files can't answer, correctly turned down). Write your own suite with `{"question": "…", "expect": "a regex the quoted passage must match"}` and `{"question": "…", "unanswerable": true}`. On Libra's own docs, with the questions worded differently from the text ([`kb_libra_docs.jsonl`](libra/evals/kb_libra_docs.jsonl)), it gets 9 of 24 right and 5 wrong, and refuses all 10 unrelated questions. Most misses are refusals: the right passage is found, but no single sentence shares enough of the question's words to quote.
 
 Suites are JSON Lines. See [`libra/evals/`](libra/evals) for the built-in ones and [`evaluate.py`](libra/evaluate.py) for the format. Two baselines to compare against: the planner scores 27/28 on its suite (it refuses "calculate 17% of 250"). A 130K-parameter model trained only on this README scores 0.425 on behaviour, against 0.39 for random guessing. A small model needs far more, and broader, text to do much better.
 

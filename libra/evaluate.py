@@ -3,6 +3,7 @@
     libra eval plan                       # tool choice: does the planner pick the right skills?
     libra eval model checkpoints/web      # the model: held-out loss and behaviour
     libra eval model checkpoints/web --text heldout.txt --suite my-suite.jsonl
+    libra eval kb --suite my-questions.jsonl   # your files: right answers, wrong answers, honest refusals
     libra eval history                    # every result so far, with changes since the previous one
 
 Lower next-token loss doesn't by itself mean better answers, so the model is measured in
@@ -18,7 +19,9 @@ separate ways:
 Suites are JSON Lines. Model items look like ``{"prompt": "The cats", "choices": [" are", " is"],
 "answer": 0, "tag": "agreement"}`` or ``{"prompt": "Q: … A:", "expect": ["Paris"]}``. Planner items
 look like ``{"goal": "…", "skills": ["scrape", "summarize"]}``, or ``{"goal": "…", "refuse": true}``
-for a goal that should not be planned. Built-in suites are in ``libra/evals/``.
+for a goal that should not be planned. Knowledge-base items look like ``{"question": "…", "expect": "regex"}``
+(the answer must quote a passage matching it) or ``{"question": "…", "unanswerable": true}`` (it must
+refuse). Built-in suites are in ``libra/evals/``.
 
 Results are appended to ``~/.libra/eval/history.jsonl`` with the checkpoint version, so you can
 compare runs and see a regression before it reaches users. ``libra auto`` can require that the
@@ -38,6 +41,7 @@ from . import home
 SUITES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evals")
 DEFAULT_PLAN_SUITE = os.path.join(SUITES, "planner.jsonl")
 DEFAULT_MODEL_SUITE = os.path.join(SUITES, "english_basics.jsonl")
+LIBRA_DOCS_KB_SUITE = os.path.join(SUITES, "kb_libra_docs.jsonl")  # for a workspace holding Libra's own docs
 
 
 def load_suite(path: str) -> list[dict]:
@@ -78,6 +82,39 @@ def plan_suite(registry, path: str = DEFAULT_PLAN_SUITE) -> dict:
     return {"kind": "plan", "suite": os.path.basename(path), "items": len(items),
             "accuracy": round(right / max(1, len(items)), 4),
             "step_accuracy": round(steps_right / max(1, steps_total), 4), "failures": failures}
+
+
+# ------------------------------------------------------------ knowledge base
+def kb_suite(workspace, path: str) -> dict:
+    """Score grounded answers from your files. Three numbers, because they trade off:
+    ``right`` (answered, quoting the expected passage), ``wrong`` (answered from the wrong place), and
+    ``refused`` (questions your files can't answer, correctly turned down)."""
+    import re
+
+    items = load_suite(path)
+    answerable = [i for i in items if not i.get("unanswerable")]
+    unanswerable = [i for i in items if i.get("unanswerable")]
+    right = wrong = refused = 0
+    failures = []
+    for item in answerable:
+        a = workspace.ask(item["question"], clarify=False)
+        if a.status == "answered" and re.search(item["expect"], a.text):
+            right += 1
+            continue
+        if a.status == "answered":
+            wrong += 1
+        failures.append({"question": item["question"], "expected": item["expect"],
+                         "got": a.status if a.status != "answered" else "wrong passage: " + a.text[:120]})
+    for item in unanswerable:
+        a = workspace.ask(item["question"], clarify=False)
+        if a.status != "answered":
+            refused += 1
+        else:
+            failures.append({"question": item["question"], "expected": "refuse", "got": a.text[:120]})
+    return {"kind": "kb", "suite": os.path.basename(path), "items": len(items),
+            "passages": len(workspace.passages), "answerable": len(answerable),
+            "right": round(right / max(1, len(answerable)), 4), "wrong": round(wrong / max(1, len(answerable)), 4),
+            "refused": round(refused / len(unanswerable), 4) if unanswerable else None, "failures": failures}
 
 
 # --------------------------------------------------------------------- model
@@ -196,7 +233,7 @@ def record(result: dict) -> dict:
     prev = None
     for old in history():
         if old.get("kind") == rec["kind"] and old.get("suite") == rec.get("suite") and \
-                (rec["kind"] == "plan" or old.get("model") == rec.get("model")):
+                (rec["kind"] in ("plan", "kb") or old.get("model") == rec.get("model")):
             prev = old
     with open(_history_path(), "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -215,6 +252,8 @@ def headline(rec: dict) -> dict:
     """The numbers worth comparing between runs."""
     if rec.get("kind") == "plan":
         return {"accuracy": rec.get("accuracy"), "step_accuracy": rec.get("step_accuracy")}
+    if rec.get("kind") == "kb":
+        return {"right": rec.get("right"), "wrong": rec.get("wrong"), "refused": rec.get("refused")}
     out = {"choice_accuracy": rec.get("choice_accuracy"), "generation_pass": rec.get("generation_pass")}
     if rec.get("heldout"):
         out["heldout_loss"] = rec["heldout"]["loss"]
@@ -230,11 +269,14 @@ def describe(result: dict, prev: dict | None = None) -> str:
         change = ""
         if before.get(key) is not None:
             delta = value - before[key]
-            better = delta < 0 if key == "heldout_loss" else delta > 0
+            better = delta < 0 if key in ("heldout_loss", "wrong") else delta > 0
             change = "  (unchanged)" if abs(delta) < 1e-9 else f"  ({delta:+.4f}, {'better' if better else 'worse'})"
         lines.append(f"  {key:<16} {value}{change}")
     if result.get("kind") == "plan":
         lines.insert(0, f"planner on {result['suite']}: {result['items']} goals")
+    elif result.get("kind") == "kb":
+        lines.insert(0, f"knowledge base on {result['suite']}: {result['answerable']} answerable and "
+                        f"{result['items'] - result['answerable']} unanswerable questions, {result['passages']} passages")
     else:
         lines.insert(0, f"model {result['model']} (version {result['version']}, {result['parameters']:,} parameters)")
         if result.get("heldout"):

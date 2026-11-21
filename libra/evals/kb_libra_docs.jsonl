@@ -1,0 +1,36 @@
+// Questions about Libra's own docs, worded differently from them. For a workspace built with:
+//   libra kb add README.md LEARN.md INSTALL.md SECURITY.md CONTRIBUTING.md deploy/README.md docs/MOBILE.md docs/REVIEW.md clients/java/README.md
+{"question": "my handset was stolen, how do I cut it off", "expect": "devices revoke|Revoke"}
+{"question": "how can I reach the assistant when I'm away from home", "expect": "Tailscale"}
+{"question": "what happens if the computer loses power in the middle of a goal", "expect": "kill -9|power cut|reboot|crash"}
+{"question": "can a web page trick it into emailing my report", "expect": "[Oo]utside content"}
+{"question": "where do I get the apk", "expect": "libra\\.apk"}
+{"question": "how do I keep the server alive after a reboot", "expect": "at boot|starting automatically"}
+{"question": "which java versions work with the client library", "expect": "Java 11"}
+{"question": "how is a stale sign-in on the browser ended", "expect": "[Ss]ession"}
+{"question": "how do I report a security bug privately", "expect": "private advisory|privately"}
+{"question": "what do I need to back up", "expect": "[Bb]ack up"}
+{"question": "how do I stop being asked every time a tool runs", "expect": "trust allow"}
+{"question": "what does the nightly learning job do", "expect": "[Nn]ightly|libra-auto"}
+{"question": "how do I let a bot answer in my chat server", "expect": "Discord"}
+{"question": "is my phone's secret encrypted", "expect": "Keystore"}
+{"question": "how do I check a downloaded release file is genuine", "expect": "SHA256SUMS"}
+{"question": "what happens when too many wrong passwords are tried", "expect": "lock|10 minutes"}
+{"question": "how do I rehearse the setup without root", "expect": "--root"}
+{"question": "can the agent repeat a payment after a crash", "expect": "reconcile|interrupted"}
+{"question": "how do I give an extension permission to run without asking", "expect": "accept-plugin|trust allow"}
+{"question": "how big a computer do I need", "expect": "RAM|GB"}
+{"question": "how do I make the program speak spanish", "expect": "[Tt]ranslat"}
+{"question": "what keeps a bad model from replacing a good one", "expect": "held-out|rollback|gate"}
+{"question": "how do I see what the agent did", "expect": "--events|audit|journalctl"}
+{"question": "where are my settings stored", "expect": "LIBRA_HOME|~/\\.libra"}
+{"question": "who won the football world cup", "unanswerable": true}
+{"question": "what is the capital of mongolia", "unanswerable": true}
+{"question": "recipe for banana bread", "unanswerable": true}
+{"question": "how tall is mount everest", "unanswerable": true}
+{"question": "best price for flights to tokyo", "unanswerable": true}
+{"question": "what is my blood pressure", "unanswerable": true}
+{"question": "lyrics of a famous song", "unanswerable": true}
+{"question": "stock price of a car maker today", "unanswerable": true}
+{"question": "how to knit a scarf", "unanswerable": true}
+{"question": "when was the roman empire founded", "unanswerable": true}
