@@ -68,7 +68,10 @@ jobs:
           LIBRA_KEYSTORE_PASSWORD: ${{ secrets.LIBRA_KEYSTORE_PASSWORD }}
           LIBRA_KEY_ALIAS: ${{ secrets.LIBRA_KEY_ALIAS }}
           LIBRA_KEY_PASSWORD: ${{ secrets.LIBRA_KEY_PASSWORD }}
-        run: gradle --no-daemon testDebugUnitTest lintDebug assembleRelease
+        # assembleDebug also creates the debug key that release builds fall back to without a release key
+        run: |
+          [ -n "${LIBRA_KEYSTORE_PATH:-}" ] || echo "::warning::No release signing key (LIBRA_KEYSTORE_BASE64): this APK is signed with a temporary debug key and later APKs won't install over it."
+          gradle --no-daemon testDebugUnitTest lintDebug assembleDebug assembleRelease
       - run: mkdir out && cp android/app/build/outputs/apk/release/app-release.apk out/libra.apk
       - uses: actions/upload-artifact@v4
         with:
