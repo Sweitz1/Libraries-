@@ -544,6 +544,63 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(listed, {broken: "damaged", odd: "damaged", fine: "queued"})
         self.assertEqual([j["id"] for j in jobs.resume_all(reg, retry_delay=0)], [fine])  # the rest carry on
 
+    def test_a_hung_call_does_not_hang_the_job(self):
+        from libra import jobs
+
+        reg = build_registry(self.state, allow_send=True)
+        stuck = {"read": 0, "write": 0}
+
+        @reg.skill("slow_lookup", "Look up the slow thing", risk="read",
+                   router=lambda m: {} if "slow thing" in m.lower() else None)
+        def slow_lookup():
+            stuck["read"] += 1
+            time.sleep(5)
+            return "too late"
+
+        @reg.skill("slow_post", "Post the slow update", risk="write",
+                   router=lambda m: {} if "slow update" in m.lower() else None)
+        def slow_post():
+            stuck["write"] += 1
+            time.sleep(5)
+            return "posted"
+
+        reg.policy.set("slow_post", "allow")
+        t0 = time.time()
+        job = jobs.run(jobs.create("look up the slow thing", reg, max_call_seconds=0.5)["id"], reg, retry_delay=0)
+        self.assertLess(time.time() - t0, 3)  # gave up on the call instead of waiting for it
+        self.assertEqual(job["status"], "failed")
+        self.assertIn("didn't finish within 0.5s", job["steps"][0]["error"])
+        self.assertEqual(stuck["read"], 1)  # a stuck read isn't retried
+        self.assertIn("call abandoned", [e["event"] for e in jobs.events(job["id"])])
+
+        # a change that hangs may still happen: the job waits for a person, like after a crash
+        job = jobs.run(jobs.create("post the slow update", reg, max_call_seconds=0.5)["id"], reg, retry_delay=0)
+        self.assertEqual((job["status"], job["waiting"]["kind"]), ("waiting", "interrupted"))
+        self.assertIn("may still complete", job["waiting"]["reason"])
+        self.assertEqual(stuck["write"], 1)
+        job = jobs.run(job["id"], reg, retry_delay=0)  # not re-run on its own
+        self.assertEqual((job["status"], stuck["write"]), ("waiting", 1))
+        jobs.skip(job["id"])
+        self.assertEqual(jobs.run(job["id"], reg, retry_delay=0)["status"], "failed")
+
+    def test_cancel_reaches_a_running_call(self):
+        from libra import jobs
+
+        reg = build_registry(self.state, allow_send=True)
+
+        @reg.skill("slow_lookup", "Look up the slow thing", risk="read",
+                   router=lambda m: {} if "slow thing" in m.lower() else None)
+        def slow_lookup():
+            time.sleep(5)
+            return "too late"
+
+        job_id = jobs.create("look up the slow thing", reg)["id"]
+        threading.Timer(0.4, lambda: jobs.cancel(job_id)).start()
+        t0 = time.time()
+        job = jobs.run(job_id, reg, retry_delay=0)
+        self.assertLess(time.time() - t0, 3)
+        self.assertEqual(job["status"], "cancelled")
+
     def test_cancel_and_time_limit(self):
         from libra import jobs
 
