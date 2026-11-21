@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import sys
+import time
 
 from . import chat as chat_fmt
 from . import backend as B
@@ -494,6 +495,45 @@ def cmd_translate(args) -> None:
             print(f"model {name(src)}→{name(tgt)}: {path}")
 
 
+def cmd_auto(args) -> None:
+    from . import auto
+
+    path = args.config
+    if args.action == "init":
+        auto.write_template(path)
+        print(f"wrote {path}. Edit its sources (sites you trust and are allowed to train on), then try:\n"
+              f"  libra auto run {path} --dry-run")
+    elif args.action == "run":
+        while True:
+            report = auto.run(path, dry_run=args.dry_run, log=None if args.quiet else print)
+            print(report.markdown(auto.load_config(path)))
+            if not args.loop:
+                break
+            print(f"next run in {args.every:g} hour(s); Ctrl+C to stop")
+            time.sleep(args.every * 3600)
+    elif args.action == "status":
+        print(auto.status(path))
+    elif args.action == "rollback":
+        print(f"restored the previous model in {auto.rollback(path)}")
+    else:
+        lines = auto.schedule_lines(path, args.at)
+        if args.install:
+            if os.name == "nt":
+                raise SystemExit("on Windows, run this command yourself:\n  " + lines["windows"])
+            import subprocess
+
+            current = subprocess.run(["crontab", "-l"], capture_output=True, text=True).stdout
+            if lines["cron"] in current:
+                print("already scheduled")
+                return
+            new = (current.rstrip("\n") + "\n" if current.strip() else "") + lines["cron"] + "\n"
+            subprocess.run(["crontab", "-"], input=new, text=True, check=True)
+            print(f"scheduled daily at {args.at}:\n  {lines['cron']}")
+        else:
+            print("Linux/macOS (crontab -e, then add this line), or rerun with --install:\n  " + lines["cron"])
+            print("Windows (Command Prompt):\n  " + lines["windows"])
+
+
 def cmd_scrape(args) -> None:
     from .web import Fetcher, scrape, to_markdown
 
@@ -688,6 +728,17 @@ def build_parser() -> argparse.ArgumentParser:
     tl.add_argument("--json", action="store_true", help="text: print the full result as JSON")
     tl.set_defaults(func=cmd_translate)
 
+    au = sub.add_parser("auto", help="unattended collect → filter → train → keep-if-better runs")
+    au.add_argument("action", choices=["init", "run", "status", "rollback", "schedule"])
+    au.add_argument("config", nargs="?", default="libra-auto.json")
+    au.add_argument("--dry-run", action="store_true", help="run: collect and filter only; write and train nothing")
+    au.add_argument("--loop", action="store_true", help="run: keep running every --every hours")
+    au.add_argument("--every", type=float, default=24, help="run --loop: hours between runs")
+    au.add_argument("--quiet", action="store_true", help="run: print only the report")
+    au.add_argument("--at", default="02:30", help="schedule: daily time HH:MM")
+    au.add_argument("--install", action="store_true", help="schedule: add it to your crontab (Linux/macOS)")
+    au.set_defaults(func=cmd_auto)
+
     w = sub.add_parser("scrape", help="extract text, tables, links or CSS-selected elements from a web page")
     w.add_argument("url")
     w.add_argument("--select", action="append", default=[], help="CSS selector (repeatable)")
@@ -734,7 +785,7 @@ def main(argv=None) -> None:
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
-    except (RuntimeError, FileNotFoundError, ValueError, KeyError, ImportError) as exc:
+    except (RuntimeError, FileNotFoundError, FileExistsError, ValueError, KeyError, ImportError) as exc:
         raise SystemExit(f"libra: error: {exc}") from None
 
 

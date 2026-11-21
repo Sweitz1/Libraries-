@@ -45,6 +45,7 @@ class TrainConfig:
     resume: bool = False
     sample_prompt: str = ""
     device: str = "auto"
+    max_seconds: float = 0  # stop (and save) after this long; 0 = no limit
 
 
 def _iter_files(paths: list[str]):
@@ -161,7 +162,8 @@ def train(cfg: TrainConfig, log=print) -> GPT:
             rate = tokens_seen / max(1e-9, time.time() - t0)
             log(f"step {step:5d} | loss {loss.item():.4f} | lr {lr:.2e} | grad {norm:.2f} | {rate:,.0f} tok/s")
 
-        last = step == cfg.steps - 1
+        out_of_time = bool(cfg.max_seconds) and time.time() - t0 > cfg.max_seconds
+        last = step == cfg.steps - 1 or out_of_time
         if (cfg.eval_every and step > 0 and step % cfg.eval_every == 0) or last:
             val = estimate_loss(model, val_ids, cfg, rng)
             meta = {"step": step + 1, "val_loss": val, "best_val": min(best_val, val)}
@@ -174,5 +176,8 @@ def train(cfg: TrainConfig, log=print) -> GPT:
                               SamplingParams(max_tokens=60, temperature=0.8, seed=step))
             log("sample: " + sample.replace("\n", " ")[:200])
             model.train()
+        if out_of_time:
+            log(f"time limit reached after step {step + 1}; checkpoint saved")
+            break
     model.eval()
     return model

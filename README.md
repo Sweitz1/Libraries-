@@ -22,8 +22,9 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/openapi.py`, `libra/yamlish.py` | OpenAPI/Swagger importer and caller; a small YAML reader for specs |
 | `libra/trust.py` | Risk levels, allow/ask/deny rules, confirmation prompts, audit log |
 | `libra/translate.py`, `libra/lang.py` | Translation memory, IBM Model 1 alignment, adaptation, glossing, pivoting; language detection and romanization |
+| `libra/auto.py` | Unattended collect → filter → train → gate → report runs, with locking, limits, rollback and scheduling |
 | `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
-| `libra/cli.py` | `libra data / train / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
+| `libra/cli.py` | `libra data / train / auto / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -36,6 +37,20 @@ pip install -e .          # or just: pip install numpy, then use "python -m libr
 ```
 
 Python 3.9+.
+
+## Minimum resources
+
+Everything except training runs in about **50 MB of RAM**. Training is the only demanding part. Measured on a 4-core CPU without a GPU:
+
+| What you're doing | Peak RAM | Disk | Speed |
+|---|---|---|---|
+| Grounded answers, translation, skills, serving a trained model | 35–80 MB | grows with your data | 0.1–0.2 s per answer |
+| Train tiny (0.3M parameters) | 185 MB | 4 MB model | 7,000 tokens/s |
+| Train small (0.9M, the default) | 882 MB, or 257 MB with `--batch 4` | 14 MB model | 2,500 tokens/s |
+| Train medium (5M) | 6.6 GB, 1.7 GB with `--batch 4`, 0.95 GB with `--batch 2` | 76 MB model | 500–700 tokens/s |
+| Skill catalog with 1,000,000 skills | small | 567 MB | 140–260 ms per search |
+
+That means roughly 4–5 hours for 20,000 steps of the small model, and about 1.5 days for the medium one, on those 4 cores. An NVIDIA GPU (`--device gpu`) should be much faster, but that hasn't been measured. No internet is needed except for crawling, web APIs, remote MCP servers and downloading data.
 
 ## Quick start
 
@@ -112,6 +127,77 @@ A rule of thumb: you want at least about 20 training tokens per parameter. Keep 
 ### Useful flags
 
 `--vocab` tokenizer size · `--ctx` context length · `--layers` `--heads` `--embd` model size · `--batch` batch size · `--steps` training steps · `--lr` peak learning rate · `--dropout` · `--eval-every` · `--resume` · `--sample-prompt` text used for the preview printed at each evaluation.
+
+## Automatic training from the web
+
+`libra auto` runs the whole loop unattended: **collect, filter, train, and keep the new model only if it's better**. Then it writes a short report you can check in a minute.
+
+```bash
+libra auto init libra-auto.json            # writes a config to edit
+libra auto run libra-auto.json --dry-run   # see what would be collected and dropped; writes nothing
+libra auto run libra-auto.json             # one real run
+libra auto schedule libra-auto.json --at 02:30 --install   # every night (Linux/macOS crontab)
+libra auto status libra-auto.json          # last report, and how many runs improved the model
+libra auto rollback libra-auto.json        # go back to the model before the last change
+```
+
+No scheduler available? `libra auto run libra-auto.json --loop --every 24` keeps running in the foreground. On Windows, `libra auto schedule` prints the `schtasks` command to use.
+
+### The config
+
+```json
+{
+  "name": "my-model",
+  "sources": [
+    {"crawl": "https://example.com/docs/", "max_pages": 100, "depth": 2, "include": "", "exclude": ""},
+    {"feed": "https://example.com/blog/feed.xml", "max_items": 20},
+    {"url": "https://example.com/about"},
+    {"gutenberg": 1342},
+    {"files": "~/my-notes"}
+  ],
+  "dataset": "datasets/auto",
+  "model": "checkpoints/auto",
+  "model_config": {"layers": 4, "embd": 128, "heads": 4, "ctx": 128, "vocab": 1024, "batch": 16},
+  "steps_per_run": 2000,
+  "filters": {"min_chars": 300, "language": "en", "max_symbol_ratio": 0.25, "mask_personal_info": true},
+  "limits": {"max_pages_per_run": 300, "max_dataset_mb": 500, "max_minutes": 120, "min_free_disk_mb": 2000,
+             "delay_seconds": 1.0},
+  "gate": {"holdout_fraction": 0.05, "max_regression": 0.02}
+}
+```
+
+Relative paths are relative to the config file. YAML configs (`.yaml`) work too.
+
+### What one run does
+
+1. **Locks**, so overlapping runs can't happen (a lock left by a crashed run is ignored), and checks free disk space and the dataset size limit.
+2. **Collects** from your sources:
+   - Crawls obey robots.txt and wait between requests.
+   - A page budget caps each run.
+   - Pages that haven't changed since last time are skipped.
+   - Feeds (RSS and Atom) bring in new posts as they appear.
+3. **Filters** each document:
+   - It removes boilerplate lines (cookie banners, "share on", "sign in", copyright footers) and stray fragments.
+   - It drops documents that are too short, mostly symbols or numbers, in the wrong language, repetitive, or duplicates.
+   - It **masks e-mail addresses and phone numbers**.
+   - The report counts every drop by reason.
+4. **Trains a copy** of the current model, or a new one on the first run, for `steps_per_run` steps within `max_minutes`. Your current model is never touched while this happens.
+5. **Gates the result.** One in 20 kept documents (`holdout_fraction`) goes to a held-out set that is never trained on. The old and new models are both scored on it, and the new one replaces the old only if it's no worse than `max_regression` allows (2% by default). Otherwise it's set aside in `checkpoints/auto.rejected`. The replaced model stays in `checkpoints/auto.previous` for `rollback`.
+6. **Reports** to `datasets/auto/.auto/last-report.md` (and appends to `runs.jsonl`):
+
+```
+- pages fetched: 10 (unchanged since last time: 0)
+- documents kept: 5 (4,213 characters); masked e-mails/phones: 2
+- dropped: mostly symbols or numbers: 1, too short: 3, wrong language (fr): 1
+- training: 40 steps; held-out loss: old 4.1497 → new 3.9297
+- decision: kept the new model (held-out loss did not get worse)
+```
+
+### What still needs you
+
+- **Pick the sources.** Choose sites you trust and whose terms allow training on their text: your own sites, documentation you have rights to, public-domain books. Crawling the open web at random mostly teaches junk.
+- **Glance at the report** now and then. The gate catches a model getting worse; it can't tell you whether the text was what you wanted.
+- **Expect gradual progress.** On a 4-core computer the default model trains at about 2,500 tokens/s, so each nightly run moves it a little. See *Minimum resources* for sizes and speeds.
 
 ## Your files as a knowledge base (grounded answers)
 
