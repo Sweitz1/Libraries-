@@ -338,13 +338,15 @@ New built-in skill: **`summarize`** keeps the sentences that best cover a text's
 libra jobs start "list the links on https://example.com/blog then scrape each of them then summarize it in 5 sentences"
 libra jobs list                  # every job: done, waiting, failed, cancelled …
 libra jobs show <id> --events    # steps, dependencies, checks, and the full event log
-libra jobs approve <id>          # let the step that is waiting run (once)
+libra jobs approve <id>          # let the operation that is waiting run (once); --digest <prefix> to be exact
 libra jobs skip <id>             # or skip it
 libra jobs resume                # carry on with interrupted jobs (the server and the timer do this too)
 libra jobs cancel <id>
 ```
 
-Scheduled goals, and plain goals started from the app, run as jobs. The app's **Agent** tab lists them, with **Approve**, **Skip step** and **Cancel** buttons. Over HTTP: `POST /v1/jobs {"goal": …}`, `GET /v1/jobs`, `GET /v1/jobs/<id>`, `POST /v1/jobs/<id>/approve|skip|cancel|resume`.
+Scheduled goals, and plain goals started from the app, run as jobs. The app's **Agent** tab lists them, with **Approve**, **Skip step** and **Cancel** buttons. Over HTTP: `POST /v1/jobs {"goal": …}`, `GET /v1/jobs`, `GET /v1/jobs/<id>`, `POST /v1/jobs/<id>/approve|skip|cancel|resume`. The approve body can name the operation it approves, `{"operation_digest": "…"}` (from `waiting.operation`); if the job changed since, the answer is 409.
+
+- **An approval covers one exact operation.** A waiting job shows what would run: the skill, its risk and the concrete arguments, with a SHA-256 digest of them, the job and the step. The approval is bound to that digest and used once. If anything changes before it runs (other arguments, another skill or risk), the job asks again. Approvals saved before 0.16 have no digest, so they ask again too. Continuing after a time limit never approves a change.
 
 - **Saved as it goes.** The job file is replaced atomically before and after every step, and after every item of an "each of them" step. A crash, a reboot or `kill -9` loses at most the step in progress.
 - **Resumes without redoing work.** Finished steps and finished items are kept. The server resumes interrupted jobs when it starts, and the agent timer does too.
