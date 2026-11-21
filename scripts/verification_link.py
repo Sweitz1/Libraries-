@@ -239,7 +239,12 @@ def main(argv):
     ref = commit or ("origin/main" if git("rev-parse", "--verify", "-q", "origin/main").returncode == 0 else "HEAD")
     r = git("rev-parse", "--verify", "-q", ref + "^{commit}")
     if r.returncode != 0:
-        print(f"Error: {ref!r} isn't a commit in this checkout. Try git fetch origin main first.", file=sys.stderr)
+        hint = (r.stderr.strip().splitlines() or [""])[-1]
+        if "dubious ownership" in hint or "safe.directory" in hint:
+            print(f"Error: git won't read this checkout: {hint}\n"
+                  f"       Run: git config --global --add safe.directory {ROOT}", file=sys.stderr)
+        else:
+            print(f"Error: {ref!r} isn't a commit in this checkout. Try git fetch origin main first.", file=sys.stderr)
         return 3
     sha = r.stdout.strip()
     date, subject = git("log", "-1", "--format=%cs%x00%s", sha).stdout.strip().split("\x00")

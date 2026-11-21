@@ -153,6 +153,11 @@ class LibraDataScriptsTest(unittest.TestCase):
 class VerificationLinkTest(unittest.TestCase):
     script = os.path.join(ROOT, "scripts", "verification_link.py")
 
+    def setUp(self):
+        r = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True)
+        if r.returncode != 0:  # e.g. a downloaded zip, or a checkout git calls "dubious ownership"
+            self.skipTest("git can't read this checkout: " + (r.stderr.strip().splitlines() or ["no git"])[-1])
+
     def test_page_pins_one_commit(self):
         sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         r = run(sys.executable, self.script, "--commit", "HEAD", "--offline")

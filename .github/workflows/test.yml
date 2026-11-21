@@ -35,6 +35,9 @@ jobs:
           - {python: "3.11", debian: bookworm}
     steps:
       - uses: actions/checkout@v5
+      # The container runs as root but the checkout belongs to the runner's user, so git refuses it
+      # ("dubious ownership") unless it's marked safe. Tests that read git history need it.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: pip install -e .
       - run: pip install opencv-python-headless || echo "OpenCV unavailable, so the QR decode check is skipped"
       - run: python -m unittest discover -s tests -v
