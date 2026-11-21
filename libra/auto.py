@@ -588,18 +588,13 @@ def notify(cfg: dict, report: "Report", log=print) -> bool:
     failed = "failed" in report.decision or report.decision.startswith("time limit") or bool(report.errors)
     if (when == "changes" and not (changed or failed)) or (when == "failures" and not failed):
         return False
-    from .web import FetchError, Fetcher
+    from .notify import send
 
-    title = f"Libra {cfg['name']}: {report.decision}"[:180].encode("ascii", "replace").decode()
-    try:
-        Fetcher(allow_private=bool(cfg.get("allow_private") or n.get("allow_private")), respect_robots=False,
-                timeout=15).request("POST", url, {"Title": title, "Content-Type": "text/plain; charset=utf-8"},
-                                    report.markdown(cfg).encode("utf-8"), raise_for_status=True)
-        return True
-    except (FetchError, OSError) as exc:
-        if log:
-            log(f"  notification failed: {exc}")
-        return False
+    ok = send(url, f"Libra {cfg['name']}: {report.decision}", report.markdown(cfg),
+              allow_private=bool(cfg.get("allow_private") or n.get("allow_private")))
+    if not ok and log:
+        log("  notification failed")
+    return ok
 
 
 def run(config_path: str, dry_run: bool = False, log=print) -> Report:

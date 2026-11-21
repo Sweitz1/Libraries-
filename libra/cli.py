@@ -596,10 +596,40 @@ def cmd_agent(args) -> None:
         print("\n" + r.describe())
         if r.status != "done":
             raise SystemExit(1)
+    elif a == "auto":
+        from .autonomy import pursue
+
+        goal = " ".join(items)
+        if not goal:
+            raise SystemExit('usage: libra agent auto "your goal"')
+        r = pursue(goal, _registry(args), args.max_steps, args.max_items, args.max_minutes * 60,
+                   log=lambda m: print("… " + m))
+        agent.record(r)
+        print("\n" + r.describe())
+        if r.status != "done":
+            raise SystemExit(1)
+    elif a == "procedures":
+        procs = agent.load_procedures()
+        if items and items[0] == "forget":
+            shape = " ".join(items[1:])
+            if shape in procs:
+                procs.pop(shape)
+                with open(agent._path("procedures.json"), "w", encoding="utf-8") as f:
+                    json.dump(procs, f, indent=2)
+                print("forgotten")
+            else:
+                print("no such procedure (copy its shape from: libra agent procedures)")
+            return
+        if not procs:
+            print("no learned procedures yet (successful 'libra agent auto' runs are learned)")
+        for shape, pr in sorted(procs.items()):
+            print(f"  {shape}\n      → {' → '.join(st['skill'] for st in pr['steps'])}"
+                  f"{'  (repaired)' if pr.get('note') == 'repaired' else ''}; learned from: {pr['learned_from'][:60]}")
     elif a == "add":
         if len(items) < 2:
             raise SystemExit('usage: libra agent add NAME "goal" [--every daily@07:00]')
-        p = agent.add_goal(items[0], " ".join(items[1:]), args.every, _registry(args, interactive=False))
+        p = agent.add_goal(items[0], " ".join(items[1:]), args.every, _registry(args, interactive=False),
+                           autonomous=args.auto)
         print(p.describe())
         print(f"\nsaved as {items[0]!r}" + (f", runs {args.every}" if args.every else " (run it with: libra agent "
                                                                                      f"start {items[0]})"))
@@ -626,6 +656,99 @@ def cmd_agent(args) -> None:
     elif a == "run-due":
         for r in agent.run_due(_registry(args, interactive=False)):
             print(f"{r.name}: {r.status}")
+
+
+def cmd_discord(args) -> None:
+    from . import discord, home
+
+    cfg = discord.load_config()
+    a, items = args.action, args.items
+    if a == "setup":
+        import getpass
+
+        path = args.token_file or home.path("discord-token")
+        if os.environ.get("DISCORD_TOKEN"):
+            token = os.environ["DISCORD_TOKEN"].strip()
+        elif sys.stdin.isatty():
+            print("Create a bot at https://discord.com/developers/applications (New Application → Bot → Reset Token).")
+            token = getpass.getpass("Paste the bot token (hidden): ").strip()
+        else:
+            token = sys.stdin.readline().strip()
+        if not token:
+            raise SystemExit("no token given")
+        me = discord.REST(token).me()
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(token + "\n")
+        discord.save_config(cfg)
+        print(f"Token OK: the bot is {me.get('username')} ({me['id']}). Saved to {path} (only you can read it).")
+        print(f"\n1. Invite it to your server:\n   {discord.invite_url(me['id'])}")
+        print("2. Allow yourself to give it goals: turn on Developer Mode in Discord (Settings → Advanced),")
+        print("   right-click your name → Copy User ID, then:  libra discord allow <that ID>")
+        print("3. Start it:  libra discord run   (the Debian service starts it automatically)")
+    elif a == "check":
+        me = discord.REST(discord.read_token(args.token_file)).me()
+        print(f"OK: {me.get('username')} ({me['id']})\ninvite: {discord.invite_url(me['id'])}")
+    elif a in ("allow", "disallow"):
+        if not items or not all(i.isdigit() for i in items):
+            raise SystemExit(f"usage: libra discord {a} <numeric user ID> […]")
+        users = set(map(str, cfg.get("allowed_users") or []))
+        users = users | set(items) if a == "allow" else users - set(items)
+        cfg["allowed_users"] = sorted(users)
+        discord.save_config(cfg)
+        print("allowed users: " + (", ".join(cfg["allowed_users"]) or "none"))
+    elif a == "set":
+        if len(items) < 2 or items[0] not in ("prefix", "dm", "channels", "listen_channels", "notify_channel"):
+            raise SystemExit("usage: libra discord set prefix|dm|channels|listen_channels|notify_channel VALUE "
+                             "(channel lists: comma-separated IDs, or '' for none)")
+        key, value = items[0], " ".join(items[1:])
+        if key == "dm":
+            cfg[key] = value.lower() in ("1", "true", "yes", "on")
+        elif key in ("channels", "listen_channels"):
+            cfg[key] = [v.strip() for v in value.split(",") if v.strip()]
+        else:
+            cfg[key] = value
+        discord.save_config(cfg)
+        print(json.dumps(cfg, indent=2))
+    elif a == "config":
+        print(json.dumps(cfg, indent=2))
+    elif a == "send":
+        if len(items) < 2:
+            raise SystemExit('usage: libra discord send <channel ID> "message"')
+        discord.REST(discord.read_token(args.token_file)).send(items[0], " ".join(items[1:]))
+        print("sent")
+    else:  # run
+        token = discord.read_token(args.token_file)
+        ws = _workspace(args)
+        model = tok = None
+        if args.model and os.path.exists(os.path.join(args.model, "model.npz")):
+            model, tok, _ = checkpoint.load(args.model)
+        bot = discord.Bot(token, _registry(args, interactive=False), workspace=ws, model=model, tokenizer=tok,
+                          auto_config=args.auto_config)  # reads ~/.libra/discord.json and follows changes
+        print("libra discord: connecting… (Ctrl+C to stop)")
+        try:
+            bot.run_forever()
+        except KeyboardInterrupt:
+            bot.stop()
+
+
+def cmd_memory(args) -> None:
+    from .memory import Memory, describe
+
+    mem = Memory()
+    text = " ".join(args.items)
+    if args.action == "add":
+        if not text:
+            raise SystemExit('usage: libra memory add "a fact to keep"')
+        print(f"remembered (#{mem.add(text, source='cli')['id']})")
+    elif args.action == "search":
+        print(describe([it for _, it in mem.search(text, args.n)]))
+    elif args.action == "forget":
+        gone = mem.forget(text.lstrip("#"))
+        print(f"forgot {len(gone)}" if gone else "nothing matched")
+    else:
+        print(describe(sorted(mem.items, key=lambda it: it["updated"], reverse=True)[: args.n])
+              if mem.items else "memory is empty")
 
 
 def cmd_pair(args) -> None:
@@ -867,9 +990,11 @@ def build_parser() -> argparse.ArgumentParser:
     au.set_defaults(func=cmd_auto)
 
     ag = sub.add_parser("agent", help="give a goal in plain words; Libra plans the steps and runs your skills")
-    ag.add_argument("action", choices=["plan", "run", "add", "start", "list", "remove", "runs", "run-due"])
+    ag.add_argument("action", choices=["plan", "run", "auto", "add", "start", "list", "remove", "runs", "run-due",
+                                       "procedures"])
     ag.add_argument("items", nargs="*", help="the goal (plan/run), or NAME and goal (add), or NAME (start/remove)")
     ag.add_argument("--every", help="add: hourly, daily, weekly, 30m, 6h, daily@07:00, weekdays@08:30, weekly@09:00")
+    ag.add_argument("--auto", action="store_true", help="add: run the saved goal in autonomous mode")
     ag.add_argument("--max-steps", type=int, default=10)
     ag.add_argument("--max-items", type=int, default=5, help="most items one 'each of them' step goes through")
     ag.add_argument("--max-minutes", type=float, default=5)
@@ -877,6 +1002,22 @@ def build_parser() -> argparse.ArgumentParser:
     ag.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
     _add_skill_flags(ag)
     ag.set_defaults(func=cmd_agent)
+
+    dc = sub.add_parser("discord", help="run Libra as a Discord bot (server channels and direct messages)")
+    dc.add_argument("action", choices=["setup", "check", "allow", "disallow", "set", "config", "send", "run"])
+    dc.add_argument("items", nargs="*")
+    dc.add_argument("--token-file", help="bot token file (default: DISCORD_TOKEN or ~/.libra/discord-token)")
+    dc.add_argument("--model", help="run: a trained model to chat with")
+    dc.add_argument("--auto-config", help="run: training config, for the status command")
+    _add_workspace_flags(dc)
+    _add_skill_flags(dc)
+    dc.set_defaults(func=cmd_discord)
+
+    me = sub.add_parser("memory", help="long-term memory: facts and preferences kept between conversations")
+    me.add_argument("action", choices=["add", "search", "forget", "list"])
+    me.add_argument("items", nargs="*")
+    me.add_argument("-n", type=int, default=20)
+    me.set_defaults(func=cmd_memory)
 
     pr = sub.add_parser("pair", help="show a QR code to open the app on your phone, already signed in")
     pr.add_argument("--port", type=int, default=8000)

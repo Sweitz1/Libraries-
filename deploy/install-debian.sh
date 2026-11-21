@@ -8,6 +8,8 @@
 #   sudo ./deploy/install-debian.sh --local-only       # only this machine (use with a reverse proxy)
 #   sudo ./deploy/install-debian.sh --uninstall        # remove services; data stays in /var/lib/libra
 #
+#   sudo ./deploy/install-debian.sh --discord          # also run Libra as a Discord bot (asks for the bot token)
+#
 # Other options: --ts-hostname NAME (default libra), --no-mdns, --no-train, --no-agent, --no-apt.
 # For an unattended Tailscale login, pass a key in the environment: sudo TS_AUTHKEY=tskey-… ./install-debian.sh --tailscale
 # (the key is used once and never written to disk).
@@ -19,6 +21,7 @@
 #   libra.service          the app + API; starts at boot (after Tailscale, if used) and restarts if it stops
 #   libra-auto.timer       nightly "libra auto run" (off in its config until you pick sources); failed runs retry
 #   libra-agent.timer      runs your scheduled agent goals (checked every 5 minutes)
+#   libra-discord.service  the Discord bot (with --discord; token in /etc/libra/discord-token)
 #   <hostname>.local       the server's name on your Wi-Fi (via avahi), so phones can find it without an IP
 #   libra-admin            run any libra command as the service, e.g. sudo libra-admin kb add /path/to/notes
 set -euo pipefail
@@ -33,11 +36,12 @@ MDNS=1
 TAILSCALE=0
 TS_ONLY=0
 TS_HOST=libra
+DISCORD=0
 UNINSTALL=0
 ROOT=""            # test mode: install under this directory, skip apt, users, tailscale and systemctl
 SVC_USER=libra
 
-usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -46,6 +50,7 @@ while [ $# -gt 0 ]; do
     --tailscale) TAILSCALE=1; shift ;;
     --tailscale-only) TAILSCALE=1; TS_ONLY=1; HOST=127.0.0.1; MDNS=0; shift ;;
     --ts-hostname) TS_HOST="$2"; shift 2 ;;
+    --discord) DISCORD=1; shift ;;
     --train-at) TRAIN_AT="$2"; shift 2 ;;
     --no-train) TRAIN=0; shift ;;
     --no-agent) AGENT=0; shift ;;
@@ -75,8 +80,9 @@ if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then
 fi
 
 if [ "$UNINSTALL" = 1 ]; then
-  run_systemctl disable --now libra.service libra-auto.timer libra-agent.timer 2>/dev/null || true
+  run_systemctl disable --now libra.service libra-auto.timer libra-agent.timer libra-discord.service 2>/dev/null || true
   rm -f "$(r $UNITS)"/libra.service "$(r $UNITS)"/libra-auto.{service,timer} "$(r $UNITS)"/libra-agent.{service,timer} \
+        "$(r $UNITS)/libra-discord.service" \
         "$(r /usr/local/bin/libra-admin)" "$(r /etc/avahi/services/libra.service)"
   run_systemctl daemon-reload || true
   rm -rf "$(r $PREFIX)"
@@ -287,6 +293,39 @@ OnUnitActiveSec=5min
 WantedBy=timers.target
 EOF
 
+if [ "$DISCORD" = 1 ]; then
+  if [ ! -s "$(r $ETC)/discord-token" ] && [ -t 0 ] && [ -z "$ROOT" ]; then
+    echo "   Discord bot token (Developer Portal -> your application -> Bot -> Reset Token). Typing is hidden:"
+    read -rs DTOKEN; echo
+    if [ -n "$DTOKEN" ]; then printf '%s\n' "$DTOKEN" > "$(r $ETC)/discord-token"; fi
+    unset DTOKEN
+  fi
+  if [ -s "$(r $ETC)/discord-token" ]; then
+    chmod 0640 "$(r $ETC)/discord-token"
+    if [ -z "$ROOT" ]; then chown "root:$SVC_USER" "$ETC/discord-token"; fi
+  fi
+  cat > "$(r $UNITS)/libra-discord.service" <<EOF
+[Unit]
+Description=Libra: Discord bot
+After=network-online.target libra.service
+Wants=network-online.target
+ConditionPathExists=$ETC/discord-token
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+$COMMON
+ExecStart=$PREFIX/venv/bin/libra discord run --token-file $ETC/discord-token --workspace $DATA/workspace --model $DATA/checkpoints/auto --auto-config $DATA/libra-auto.json
+Restart=on-failure
+RestartSec=30
+$HARDEN
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
 if [ "$MDNS" = 1 ]; then
   mkdir -p "$(r /etc/avahi/services)"
   cat > "$(r /etc/avahi/services/libra.service)" <<EOF
@@ -320,6 +359,10 @@ run_systemctl enable --now libra.service
 run_systemctl restart libra.service
 if [ "$TRAIN" = 1 ]; then run_systemctl enable --now libra-auto.timer; fi
 if [ "$AGENT" = 1 ]; then run_systemctl enable --now libra-agent.timer; fi
+if [ "$DISCORD" = 1 ]; then
+  run_systemctl enable libra-discord.service
+  if [ -s "$(r $ETC)/discord-token" ]; then run_systemctl restart libra-discord.service; fi
+fi
 
 # ---------------------------------------------------------------- done
 echo
@@ -341,6 +384,16 @@ echo "   Show this QR code again any time:   sudo libra-admin pair --token-file 
 echo "   OpenAI-compatible apps (Nexus Agent): base URL = one of the addresses above + /v1, API key = the token"
 echo "   Logs: journalctl -u libra -f        Token: $ETC/token"
 echo "   Training: edit $DATA/libra-auto.json (sources, then \"enabled\": true); runs nightly at $TRAIN_AT"
+if [ "$DISCORD" = 1 ]; then
+  if [ -s "$(r $ETC)/discord-token" ]; then
+    echo "   Discord: invite link and check:  sudo libra-admin discord check --token-file $ETC/discord-token"
+    echo "            let yourself give it goals:  sudo libra-admin discord allow <your Discord user ID>"
+  else
+    echo "   Discord: no token yet. Re-run with --discord in a terminal to enter it (typing is hidden),"
+    echo "            or save it in $ETC/discord-token (owner root, group $SVC_USER, mode 640), then:"
+    echo "            sudo systemctl restart libra-discord"
+  fi
+fi
 if [ "$TAILSCALE" = 1 ] && [ -z "$ROOT" ]; then
   echo "   Tailscale: install the Tailscale app on your phone and sign in with the same account."
 fi

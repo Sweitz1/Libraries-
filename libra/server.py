@@ -226,31 +226,42 @@ def make_handler(engine: Engine):
                     self._json(200, agent.plan(str(body.get("goal", "")), engine.skills).to_dict())
                 elif action == "goals":
                     p = agent.add_goal(str(body.get("name", "")), str(body.get("goal", "")), body.get("every") or None,
-                                       engine.skills)
+                                       engine.skills, autonomous=bool(body.get("autonomous")))
                     self._json(200, {"saved": True, "plan": p.to_dict()})
                 elif action == "remove":
                     self._json(200, {"removed": agent.remove_goal(str(body.get("name", "")))})
-                elif action == "run":
+                elif action in ("run", "auto"):
                     if engine.agent_thread and engine.agent_thread.is_alive():
                         self._error(409, "the agent is already running a goal")
                         return
                     name = str(body.get("name") or "")
                     goal = str(body.get("goal") or "")
+                    autonomous = action == "auto"
                     if name:
                         goals = agent.load_goals()
                         if name not in goals:
                             self._error(404, f"no saved goal {name!r}")
                             return
                         goal = goals[name]["goal"]
+                        autonomous = autonomous or bool(goals[name].get("autonomous"))
                     p = agent.plan(goal, engine.skills)
+                    if not p.ok and autonomous:
+                        from .autonomy import _repair_plan
+
+                        p = _repair_plan(p, engine.skills, [])
                     if not p.ok:
                         self._json(200, {"started": False, "plan": p.to_dict()})
                         return
 
                     def work():
                         steps = []
-                        engine.agent_current = {"goal": goal, "name": name, "steps": steps}
-                        r = agent.execute(p, engine.skills, name=name, log=steps.append)
+                        engine.agent_current = {"goal": goal, "name": name, "steps": steps, "autonomous": autonomous}
+                        if autonomous:
+                            from .autonomy import pursue
+
+                            r = pursue(goal, engine.skills, name=name, log=steps.append)
+                        else:
+                            r = agent.execute(p, engine.skills, name=name, log=steps.append)
                         agent.record(r)
 
                     engine.agent_thread = threading.Thread(target=work, daemon=True)

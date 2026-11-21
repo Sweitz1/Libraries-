@@ -23,12 +23,14 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/trust.py` | Risk levels, allow/ask/deny rules, confirmation prompts, audit log |
 | `libra/translate.py`, `libra/lang.py` | Translation memory, IBM Model 1 alignment, adaptation, glossing, pivoting; language detection and romanization |
 | `libra/webui/` | The phone/browser app served at `/` (no external files; works offline on your network) |
+| `libra/autonomy.py`, `libra/memory.py` | Autonomous plan → act → check → adjust loop with learned procedures; long-term memory |
+| `libra/discord.py`, `libra/websocket.py`, `libra/notify.py` | Discord bot (gateway + REST), a from-scratch WebSocket client, notifications (ntfy, Discord webhooks, any URL) |
 | `libra/agent.py` | Goal agent: plans plain-language goals into skill steps, runs them under trust rules and limits, schedules |
 | `libra/qr.py`, `libra/pair.py` | QR codes (from scratch) and phone pairing: best address + token as a scannable link |
 | `deploy/` | Debian installer (systemd services and timers, Tailscale, .local name, token, QR pairing), Caddy HTTPS example, setup guide |
 | `libra/auto.py` | Unattended collect → filter → train → gate → report runs, with locking, limits, rollback and scheduling |
 | `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
-| `libra/cli.py` | `libra data / train / auto / agent / pair / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
+| `libra/cli.py` | `libra data / train / auto / agent / memory / discord / pair / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -266,6 +268,71 @@ Schedules: `hourly`, `daily`, `weekly`, `30m`, `6h`, `daily@07:00`, `weekdays@08
 
 New built-in skill: **`summarize`** keeps the sentences that best cover a text's main words, quoted exactly, in their original order.
 
+### Autonomous mode (plan → act → check → adjust)
+
+```bash
+libra agent auto "scrape https://example.com/news in 3 sentences"
+libra agent add digest "scrape https://example.com/news in 3 sentences" --every daily@07:00 --auto
+libra agent procedures            # what it has learned
+```
+
+In the app, tick **Autonomous** on the Agent tab. On Discord, use `goal …`. Autonomous mode goes beyond a plain run:
+- **Recalls** related memories before it starts.
+- **Repairs the plan.** A step with no confident match may use a weaker match, but only a read-only skill.
+- **Retries once** after a temporary network error.
+- **Tries alternatives.** If a step fails or returns nothing, it tries the next-best read-only skills (up to two).
+- **Checks the result against your wording:** "in 3 sentences", a word in quotes that must appear, the target language of a translation, and that something came out at all. Then it **adjusts**. For example, "scrape … in 3 sentences" first returns a whole page, so it adds a summarize step and checks again.
+- **Learns** a plan that worked, especially one it had to repair, as a *procedure*. The next goal of the same shape ("scrape *another URL* in *2* sentences") reuses it straight away.
+- **Remembers** what each goal produced, so you can ask about it later.
+- **Explains itself.** Each decision is shown as a thought, with its reasoning, the action taken and a caveat.
+
+It still stops at step, time and iteration limits, and it stops (rather than working around the rules) when a skill needs approval.
+
+**What it isn't.** There's no large language model behind this; Libra's own model is too small to reason reliably, and Libra uses no outside models. So the "thinking" is rule-based. It's good at goals built from your skills, but it won't invent new approaches the way GPT-based AutoGPT does.
+
+## Memory
+
+Libra keeps facts, preferences and goal outcomes between conversations, in `~/.libra/memory.jsonl`. They never leave your machine.
+
+```bash
+libra memory add "My Debian server is called atlas and sits in the office"
+libra memory search "where is the server"
+libra memory list
+libra memory forget <#id or words>
+```
+
+In any chat (app, terminal, Discord) you can say **"remember that …"**, **"what do you remember about …"** and **"forget …"**. Search uses BM25 over the remembered text, with a small bonus for memories that are recent or often used. A near-duplicate updates the existing memory instead of adding a second one.
+
+## Discord
+
+Run Libra as a bot in your Discord server and in direct messages:
+
+```bash
+libra discord setup                 # paste the bot token (hidden); prints the invite link
+libra discord allow <your user ID>  # who may give goals and change memory
+libra discord run --workspace ~/my-workspace
+```
+
+On the Debian service, add `--discord` to the installer instead; the bot then starts at boot. Talk to it by @mentioning it, in a DM, or with the `!` prefix:
+
+| Command | |
+|---|---|
+| `ask <question>` | Answer from your files, with sources |
+| `translate <text> to <language>` | Translation from your data |
+| `goal <goal>` / `plan <goal>` | Autonomous agent / plan preview |
+| `goals` / `run <name>` | Saved goals |
+| `remember …` / `recall …` / `forget …` | Memory |
+| `skills [words]` / `status` / `help` | |
+| anything else | Answered like the app's chat: skills, then your files, then your model |
+
+How it behaves:
+- **No ports to open.** The bot connects out to Discord's gateway, using a WebSocket client written from scratch here, and reconnects and resumes by itself.
+- **It only reads messages meant for it:** mentions, DMs, and messages starting with the prefix. That needs no privileged intent. To have it read *every* message in some channels, set `libra discord set listen_channels <id,…>` and enable *Message Content Intent* on the bot's page in the developer portal.
+- **The allow list.** Only users on it can start goals, run saved goals or change memory. Everyone else can ask questions, translate and use read-only skills.
+- **No approvals in Discord.** Skills that change something are refused there (allow them with `libra trust` if you want the bot to use them).
+- **It never pings anyone**, because replies are sent with mentions disabled. Long replies are split to fit Discord's limit, and rate limits are respected.
+- **Notifications:** a Discord **webhook URL** works anywhere a notify URL is accepted. Use it in `libra-auto.json` for training, or in `~/.libra/agent/settings.json` (`{"notify": {"url": "…"}}`) for scheduled goals.
+
 ## Your files as a knowledge base (grounded answers)
 
 Libra can answer **only from your own files**, citing exactly where each sentence came from. When the answer isn't in your files, it says so instead of guessing.
@@ -334,6 +401,7 @@ Built-in skills:
 | `links` | Links on a page, optionally filtered |
 | `calc` | Exact arithmetic. It parses the expression and never executes code |
 | `summarize` | The text's most important sentences, quoted exactly |
+| `remember`, `recall`, `forget` | Long-term memory ("remember that …", "what do you remember about …") |
 | `translate`, `detect_language`, `romanize` | Translation from your own data, language detection, Latin transliteration (see *Translation*) |
 | `time` | Local date and time |
 

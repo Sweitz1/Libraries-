@@ -104,8 +104,11 @@ def _lang(clause: str):
 def _content_words(text: str) -> set:
     from .knowledge import terms
 
-    stop = {"please", "it", "them", "each", "every", "result", "results", "using", "use", "page", "pages"}
-    return {t for t in terms(re.sub(URL_RE, " ", text)) if t not in stop}
+    stop = {"please", "it", "them", "each", "every", "result", "results", "using", "use", "page", "pages", "say",
+            "saying", "says", "called", "named", "message", "text", "something", "thing", "me", "my", "our"}
+    text = QUOTED.sub(" ", re.sub(URL_RE, " ", text))  # quoted text is the payload, not the instruction
+    text = re.sub(r"\b\w+=(\"[^\"]*\"|'[^']*'|\S+)", " ", text)  # so are key=value arguments
+    return {t for t in terms(text) if t not in stop}
 
 
 def _fill_args(skill, clause: str, has_prev: bool) -> tuple[dict, list, str | None]:
@@ -136,21 +139,116 @@ def _fill_args(skill, clause: str, has_prev: bool) -> tuple[dict, list, str | No
         elif has_prev:
             args[text_param] = "{prev}"
     lang = _lang(clause)
+    plain = re.sub(URL_RE, " ", clause.lower())
+    numeric = [p for p in params if (props.get(p) or {}).get("type") in ("integer", "number")]
     for p in params:
         if p in args:
             continue
-        kind = (props.get(p) or {}).get("type")
         if lang and p in ("to", "target", "target_lang", "language", "lang"):
             args[p] = lang
-        elif kind in ("integer", "number") and numbers:
-            args[p] = numbers.pop(0)
+        elif p in numeric:
+            # a number only fills a setting its neighbouring word names: "5 pages" -> max_pages, "depth 2" -> depth
+            stems = {w.rstrip("s") for w in p.lower().split("_") if w not in ("max", "min", "num", "n")}
+            for m in re.finditer(r"(\b[a-z]+\s+)?(\d+)(\s+[a-z]+)?", plain):
+                before = (m.group(1) or "").strip().rstrip("s")
+                after = (m.group(3) or "").strip().rstrip("s")
+                if before in stems or after in stems:
+                    args[p] = m.group(2)
+                    break
+    lone = [p for p in numeric if p in required and p not in args]
+    if len(lone) == 1 and len(numbers) == 1:  # a bare number for the one required number
+        args[lone[0]] = numbers[0]
     missing = [p for p in required if p not in args]
     if missing:
         return args, items, f"no value for {', '.join(missing)} of {skill.name}"
     return args, items, None
 
 
-def plan(goal: str, registry) -> Plan:
+# ------------------------------------------------------- learned procedures
+def template(goal: str) -> tuple[str, dict]:
+    """``("scrape {url1} then translate it to {lang1}", {"url1": ..., "lang1": ...})``: the goal's shape."""
+    from .lang import code_for
+
+    values: dict = {}
+    counts: dict = {}
+
+    def slot(kind: str, value: str) -> str:
+        counts[kind] = counts.get(kind, 0) + 1
+        key = f"{kind}{counts[kind]}"
+        values[key] = value
+        return "{" + key + "}"
+
+    t = URL_RE.sub(lambda m: slot("url", m.group().rstrip(".,;:!?")), goal)
+    t = QUOTED.sub(lambda m: slot("text", m.group(1)), t)
+    t = re.sub(r"\b(to|into|in)\s+([^\W\d_][\w-]*)",
+               lambda m: f"{m.group(1)} " + (slot("lang", m.group(2)) if code_for(m.group(2)) else m.group(2)), t)
+    t = re.sub(r"(?<![\w{])\d+(?![\w}])", lambda m: slot("n", m.group()), t)
+    return re.sub(r"\s+", " ", t.strip().lower()), values
+
+
+def _fill(value, values: dict):
+    if isinstance(value, str):
+        return re.sub(r"\{(url|text|lang|n)(\d+)\}", lambda m: values.get(m.group(1) + m.group(2), m.group()), value)
+    return value
+
+
+def _unfill(value, values: dict):
+    """Put placeholders back where the goal's own values appear (whole values only, never inside a placeholder)."""
+    if isinstance(value, str):
+        for key, v in sorted(values.items(), key=lambda kv: -len(kv[1])):
+            if v:
+                value = re.sub(rf"(?<![\w{{]){re.escape(v)}(?![\w}}])", "{" + key + "}", value)
+    return value
+
+
+def load_procedures() -> dict:
+    try:
+        with open(_path("procedures.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def learn(goal: str, steps: list, note: str = "") -> str:
+    """Save the steps that achieved ``goal`` so goals of the same shape reuse them."""
+    shape, values = template(goal)
+    with STATE_LOCK:
+        procs = load_procedures()
+        old = procs.get(shape, {})
+        procs[shape] = {
+            "steps": [{"clause": _unfill(s.clause, values), "skill": s.skill,
+                       "args": {k: _unfill(v, values) for k, v in s.args.items()}, "foreach": s.foreach,
+                       "items": [_unfill(i, values) for i in s.items]} for s in steps],
+            "learned_from": goal, "note": note or old.get("note", ""), "uses": old.get("uses", 0),
+            "created": old.get("created") or _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        tmp = _path("procedures.json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(procs, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, _path("procedures.json"))
+    return shape
+
+
+def _from_procedure(goal: str, registry) -> Plan | None:
+    shape, values = template(goal)
+    proc = load_procedures().get(shape)
+    if not proc:
+        return None
+    p = Plan(goal)
+    for st in proc["steps"]:
+        if st["skill"] not in registry:
+            return None  # a skill it relied on is gone: plan afresh
+        p.steps.append(Step(_fill(st["clause"], values), st["skill"], {k: _fill(v, values) for k, v in st["args"].items()},
+                            st["foreach"], [_fill(i, values) for i in st.get("items", [])],
+                            f"learned procedure ({proc.get('note') or 'from ' + repr(proc['learned_from'][:40])})"))
+    return p
+
+
+def plan(goal: str, registry, use_procedures: bool = True) -> Plan:
+    if use_procedures:
+        learned = _from_procedure(goal, registry)
+        if learned is not None:
+            return learned
     result = Plan(goal)
     for clause in split_goal(goal):
         has_prev = bool(result.steps)
@@ -395,16 +493,20 @@ def is_due(spec: str | None, last: str | None, now: _dt.datetime | None = None) 
     return last_t is None or last_t < slot
 
 
-def add_goal(name: str, goal: str, every: str | None = None, registry=None) -> Plan:
+def add_goal(name: str, goal: str, every: str | None = None, registry=None, autonomous: bool = False) -> Plan:
     if not re.fullmatch(r"[A-Za-z0-9][\w-]{0,40}", name):
         raise ValueError("goal names: letters, digits, - and _ (up to 40)")
     every = check_schedule(every)
     p = plan(goal, registry) if registry is not None else None
+    if p is not None and not p.ok and autonomous:
+        from .autonomy import _repair_plan
+
+        p = _repair_plan(p, registry, [])
     if p is not None and not p.ok:
         raise ValueError("the goal can't be planned yet:\n" + "\n".join(f"  - {x}" for x in p.problems))
     with STATE_LOCK:
         goals = load_goals()
-        goals[name] = {"goal": goal, "every": every, "enabled": True,
+        goals[name] = {"goal": goal, "every": every, "enabled": True, "autonomous": bool(autonomous),
                        "created": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                        "last_run": goals.get(name, {}).get("last_run")}
         save_goals(goals)
@@ -440,10 +542,33 @@ def recent_runs(n: int = 20) -> list[dict]:
     return [json.loads(l) for l in reversed(lines) if l.strip()]
 
 
-def run_goal(goal: str, registry, name: str = "", log=None, **limits) -> AgentRun:
-    r = execute(plan(goal, registry), registry, name=name, log=log, **limits)
+def run_goal(goal: str, registry, name: str = "", log=None, autonomous: bool = False, **limits) -> AgentRun:
+    if autonomous:
+        from .autonomy import pursue
+
+        r = pursue(goal, registry, name=name, log=log, **limits)
+    else:
+        r = execute(plan(goal, registry), registry, name=name, log=log, **limits)
     record(r)
+    _notify(r)
     return r
+
+
+def _notify(r: AgentRun) -> None:
+    """Send a scheduled run's result to the agent's notify URL (``~/.libra/agent/settings.json``)."""
+    try:
+        with open(_path("settings.json"), encoding="utf-8") as f:
+            settings = json.load(f)
+    except (OSError, ValueError):
+        return
+    n = settings.get("notify") or {}
+    if not n.get("url") or (n.get("on", "always") == "failures" and r.status == "done"):
+        return
+    from .notify import send
+
+    title = f"Libra goal {r.name or ''}: {r.status}".strip()
+    body = (r.output or "; ".join(r.problems) or r.status)[:1800]
+    send(n["url"], title, body, allow_private=bool(n.get("allow_private")))
 
 
 def run_due(registry, log=print) -> list[AgentRun]:
@@ -463,7 +588,7 @@ def run_due(registry, log=print) -> list[AgentRun]:
             if g.get("enabled", True) and is_due(g.get("every"), g.get("last_run")):
                 if log:
                     log(f"running goal {name!r}")
-                runs.append(run_goal(g["goal"], registry, name=name))
+                runs.append(run_goal(g["goal"], registry, name=name, autonomous=bool(g.get("autonomous"))))
     finally:
         os.close(fd)
         os.remove(lock)

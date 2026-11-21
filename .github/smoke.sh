@@ -21,5 +21,10 @@ libra agent run "what is (2+3)*4"
 libra agent add sum "what is 6*7" --every hourly
 libra agent run-due
 libra pair --url http://192.0.2.1:8000 --token-file /dev/null
+libra memory add "the backup runs at 3am"
+libra memory search backup
+libra agent auto "what is (2+3)*4"
+libra agent procedures
+libra discord config
 ./deploy/install-debian.sh --root "$work/install-root" --port 8799
-./deploy/install-debian.sh --root "$work/install-root" --tailscale --port 8799
+./deploy/install-debian.sh --root "$work/install-root" --tailscale --discord --port 8799 </dev/null

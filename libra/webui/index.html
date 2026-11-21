@@ -182,6 +182,8 @@
     <div class="card">
       <label for="ag-goal">Goal</label>
       <textarea id="ag-goal" placeholder="e.g. scrape https://example.com/news then summarize it in 3 sentences then translate it to Spanish"></textarea>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="ag-auto" style="width:auto">
+        Autonomous: check the result and adjust (tries alternatives, learns what works)</label>
       <div class="row" style="margin-top:10px">
         <button class="btn secondary" id="ag-plan">Preview plan</button>
         <button class="btn" id="ag-run">Run</button>

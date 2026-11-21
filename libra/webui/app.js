@@ -306,18 +306,18 @@ $("ag-plan").addEventListener("click", async () => {
   try { $("ag-out").textContent = showPlan(await json("/v1/agent/plan", { goal })); }
   catch (e) { $("ag-out").textContent = "Error: " + e.message; }
 });
-async function startAgent(body) {
+async function startAgent(body, autonomous) {
   try {
-    const r = await json("/v1/agent/run", body);
+    const r = await json(autonomous ? "/v1/agent/auto" : "/v1/agent/run", body);
     $("ag-out").textContent = r.started ? "Running…\n\n" + showPlan(r.plan) : "Can't run this goal:\n" + showPlan(r.plan);
     if (r.started) loadAgent();
   } catch (e) { $("ag-out").textContent = "Error: " + e.message; }
 }
-$("ag-run").addEventListener("click", () => { const goal = $("ag-goal").value.trim(); if (goal) startAgent({ goal }); });
+$("ag-run").addEventListener("click", () => { const goal = $("ag-goal").value.trim(); if (goal) startAgent({ goal }, $("ag-auto").checked); });
 $("ag-save").addEventListener("click", async () => {
   const name = $("ag-name").value.trim(), goal = $("ag-goal").value.trim(), every = $("ag-every").value.trim();
   if (!name || !goal) { $("ag-out").textContent = "Give the goal a name, and write the goal above."; return; }
-  try { await json("/v1/agent/goals", { name, goal, every: every || null }); $("ag-out").textContent = `Saved “${name}”.`; loadAgent(); }
+  try { await json("/v1/agent/goals", { name, goal, every: every || null, autonomous: $("ag-auto").checked }); $("ag-out").textContent = `Saved “${name}”.`; loadAgent(); }
   catch (e) { $("ag-out").textContent = e.message; }
 });
 async function loadAgent() {
@@ -330,7 +330,7 @@ async function loadAgent() {
   for (const name of names) {
     const g = r.goals[name];
     const card = el("div", { class: "card" }, el("strong", { text: name }), el("p", { class: "muted", text: g.goal }),
-      el("p", { class: "muted", text: `Runs: ${g.every || "manually"} · last: ${g.last_run ? g.last_run.replace("T", " ").slice(0, 16) + " (" + (g.last_status || "") + ")" : "never"}` }));
+      el("p", { class: "muted", text: `${g.autonomous ? "Autonomous · " : ""}Runs: ${g.every || "manually"} · last: ${g.last_run ? g.last_run.replace("T", " ").slice(0, 16) + " (" + (g.last_status || "") + ")" : "never"}` }));
     const row = el("div", { class: "row" });
     row.append(el("button", { class: "btn small", text: "Run now", onclick: () => startAgent({ name }) }),
       el("button", { class: "btn small secondary", text: "Delete", onclick: async () => {
@@ -346,7 +346,11 @@ async function loadAgent() {
     d.append(el("summary", {}, el("span", { class: "status-" + run.status, text: run.status }), " · " + (run.name || run.goal).slice(0, 80) +
       " · " + run.started.replace("T", " ").slice(5, 16)));
     const steps = run.steps.map((s, i) => `${s.ok ? "✓" : "✗"} ${i + 1}. ${s.skill}${s.items ? " ×" + s.items : ""}: ${s.clause}`);
-    d.append(el("pre", { class: "report", text: steps.concat(run.problems.map((p) => "✗ " + p)).join("\n") + (run.output ? "\n\n" + run.output : "") }));
+    const thoughts = (run.thoughts || []).map((t, i) => `💭 ${t.thought}` + (t.reasoning ? `\n   why: ${t.reasoning}` : "") +
+      (t.criticism ? `\n   caveat: ${t.criticism}` : ""));
+    const learned = run.learned ? [`📚 learned for goals like: ${run.learned}`] : [];
+    d.append(el("pre", { class: "report", text: thoughts.concat(steps, run.problems.map((p) => "✗ " + p), learned).join("\n") +
+      (run.output ? "\n\n" + run.output : "") }));
     runs.append(d);
   }
   if (agentWasRunning && !r.running && r.runs[0]) notifyDevice("Goal finished: " + (r.runs[0].name || "agent"), r.runs[0].status);

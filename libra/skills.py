@@ -408,6 +408,27 @@ def _route_translate(message: str):
     return None
 
 
+def _route_remember(message: str):
+    from .memory import REMEMBER_RE
+
+    m = REMEMBER_RE.match(message)
+    return {"text": m.group("x").strip()} if m else None
+
+
+def _route_recall(message: str):
+    from .memory import RECALL_RE
+
+    m = RECALL_RE.match(message)
+    return {"query": m.group("x")} if m else None
+
+
+def _route_forget(message: str):
+    from .memory import FORGET_RE
+
+    m = FORGET_RE.match(message)
+    return {"what": m.group("x")} if m else None
+
+
 def _route_detect(message: str):
     m = re.match(r"^\s*(?:what|which)\s+language\s+is\s+(?:this|that|it)?\s*[:\-]?\s*(?P<q>.+?)\s*\??\s*$",
                  message, re.I | re.S)
@@ -555,6 +576,29 @@ def _register_builtins(reg: SkillRegistry) -> None:
         from .lang import romanize as rz
 
         return rz(text)
+
+    @reg.skill("remember", "Keep a fact or preference in long-term memory.", {"text": "what to remember"},
+               router=_route_remember, risk="write")
+    def remember(text: str):
+        from .memory import Memory
+
+        it = Memory().add(text, source="chat")
+        return f"I'll remember that. (#{it['id']})"
+
+    @reg.skill("recall", "Look something up in long-term memory.", {"query": "what to look for"},
+               router=_route_recall, risk="read")
+    def recall(query: str):
+        from .memory import Memory, describe
+
+        return describe(Memory().recall(query))
+
+    @reg.skill("forget", "Remove memories (by #id, or ones that match closely).", {"what": "#id or words"},
+               router=_route_forget, risk="write")
+    def forget(what: str):
+        from .memory import Memory
+
+        gone = Memory().forget(what.lstrip("#"))
+        return f"Forgot {len(gone)} memor{'y' if len(gone) == 1 else 'ies'}." if gone else "Nothing matched."
 
     @reg.skill("summarize", "Shorten a text to its most important sentences (taken word for word from it).",
                {"text": "the text to summarize", "sentences": "how many sentences to keep"}, risk="read")

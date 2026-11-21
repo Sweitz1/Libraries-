@@ -20,6 +20,7 @@ To show the QR code again later: `sudo libra-admin pair --token-file /etc/libra/
 | `--tailscale-only` | Only through Tailscale; nothing is open on your home network |
 | `--local-only` | Only this machine (for your own reverse proxy, see section 4) |
 | `--port 8080`, `--train-at 03:00`, `--ts-hostname NAME` | Change the port, the nightly training time, or the name on Tailscale |
+| `--discord` | Also run Libra as a Discord bot (see *Discord* below) |
 | `--no-train`, `--no-agent`, `--no-mdns` | Skip the training timer, the agent timer, or the `.local` name |
 | `--uninstall` | Remove the services; your data stays |
 
@@ -72,6 +73,16 @@ sudo libra-admin auto run /var/lib/libra/libra-auto.json --dry-run
 
 The app's **Training** tab shows live progress, the latest report, and *Run now* and *Dry run* buttons. When a run produces a better model, the app switches to it automatically.
 
+## Discord
+
+1. Create a bot at <https://discord.com/developers/applications>: *New Application → Bot → Reset Token*, and copy the token.
+2. `sudo ./deploy/install-debian.sh --discord`. It asks for the token (typing is hidden) and stores it in `/etc/libra/discord-token`, readable only by root and the `libra` user.
+3. `sudo libra-admin discord check --token-file /etc/libra/discord-token` prints the **invite link**. Open it to add the bot to your server.
+4. In Discord, turn on *Settings → Advanced → Developer Mode*, right-click your name, *Copy User ID*, then run `sudo libra-admin discord allow <that ID>`. The bot picks this up without a restart.
+5. Mention the bot or DM it: `@Libra help`.
+
+Logs: `journalctl -u libra-discord -f`. The bot only reads messages addressed to it, never pings anyone, and refuses skills that change something unless you've allowed them with `libra trust`.
+
 ## 4. Other ways to reach it from outside
 
 Don't forward port 8000 on your router: that puts a plain-HTTP server on the internet. Use Tailscale (section 2), or a reverse proxy with HTTPS on your own domain: `deploy/Caddyfile` is a ready example. Install with `--local-only` so only the proxy can reach Libra, then follow the steps at the top of that file. Either way, the token is still required.
@@ -88,6 +99,7 @@ Don't forward port 8000 on your router: that puts a plain-HTTP server on the int
 systemctl status libra                         # is it up?
 journalctl -u libra -f                         # live log
 journalctl -u libra-auto -u libra-agent        # training and agent runs
+journalctl -u libra-discord -f                 # the Discord bot
 systemctl list-timers 'libra-*'                # when they run next
 sudo systemctl restart libra                   # after changing /etc/libra/libra.env
 ```
