@@ -9,6 +9,14 @@ Your skill instructions here...
 
 <!--
 A starter for a Claude Code skill (https://code.claude.com/docs/en/skills).
+Layout (only SKILL.md is required):
+
+  my-skill/
+  ├── SKILL.md          metadata + instructions
+  ├── scripts/          code the skill runs (see scripts/example.sh)
+  ├── references/       longer documentation it links to
+  └── assets/           templates and other files it uses
+
 Copy this folder to .claude/skills/<name>/ in this repository, or to ~/.claude/skills/<name>/
 on your own computer. The folder name, or `name` above, becomes the command: /my-skill.
 
@@ -24,6 +32,7 @@ Frontmatter:
 Body: plain instructions. A line like !`git status --short` runs before Claude reads the skill
 and is replaced by its output, so the instructions start from the real state.
 
-Libra's own skills are in .claude/skills/. See verify, release and deploy for examples.
+Libra's own skills are in .claude/skills/. See verify, release and deploy for examples, and
+roll-dice for a skill with a script and a reference file.
 (These are Claude Code skills. Libra's skills, its tools, are made from templates/plugin.py.)
 -->

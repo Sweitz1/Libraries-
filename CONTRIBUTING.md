@@ -45,6 +45,7 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 | `/summarize-changes` | Summarizes uncommitted changes and flags risks, for a commit message or a quick review |
 | `api-conventions` | Not run as a command: Claude follows it when writing or changing API endpoints and clients (paths, the error format, status codes, limits, auth and trust) |
 | `/deploy user@server [version]` | Upgrades your Debian server with the installer, checks it came up, and rolls back if not. You start it yourself, and it runs in its own context |
+| `/roll-dice` | The guide's example, with a fair dice-notation script (`2d6`, `3d8+4`): a small skill with `scripts/` and `references/` |
 | `/release X.Y.Z` | Cuts a release. You start it yourself: Claude never starts it on its own |
 
 Starting points: [`templates/`](templates) has a plugin, an evaluation suite and a training config to copy. [`docs/REVIEW.md`](docs/REVIEW.md) maps every part of the code.
