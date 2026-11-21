@@ -150,6 +150,50 @@ class LibraDataScriptsTest(unittest.TestCase):
         self.assertEqual(run(sys.executable, self.process, "--dry-run", "no-such-folder").returncode, 3)
 
 
+class VerificationLinkTest(unittest.TestCase):
+    script = os.path.join(ROOT, "scripts", "verification_link.py")
+
+    def setUp(self):
+        r = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True)
+        if r.returncode != 0:  # e.g. a downloaded zip, or a checkout git calls "dubious ownership"
+            self.skipTest("git can't read this checkout: " + (r.stderr.strip().splitlines() or ["no git"])[-1])
+
+    def test_page_pins_one_commit(self):
+        sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        r = run(sys.executable, self.script, "--commit", "HEAD", "--offline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        page = r.stdout
+        self.assertIn(f"/tree/{sha}", page)
+        self.assertIn(f"https://raw.githubusercontent.com/Sweitz1/Libraries-/{sha}/docs/REVIEW.md\n", page)  # own line
+        for section in ("## CI results for this commit", "## Read these first", "## Reproduce it", "## Not verified",
+                        "## A prompt for an AI reviewer"):
+            self.assertIn(section, page)
+        self.assertIn("Not checked when this page was written", page)  # --offline never invents CI results
+        for path in re.findall(rf"/blob/{sha}/([^)]+)\)", page):  # every pinned file exists at that commit
+            self.assertEqual(subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{sha}:{path}"]).returncode, 0, path)
+
+    def test_investigation_page(self):
+        sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        r = run(sys.executable, self.script, "--kind", "investigate", "--commit", "HEAD")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        page = r.stdout
+        for section in ("## Attack surface", "## Known residual risks", "## Hypotheses worth testing",
+                        "## Not verified at all", "## How to report", "## A prompt for an AI investigator"):
+            self.assertIn(section, page)
+        self.assertEqual(len(re.findall(r"^\| H\d+ \|", page, re.M)), 10)
+        self.assertIn("/security/advisories/new", page)  # private reporting, not public issues
+        for path in re.findall(rf"/blob/{sha}/([^)]+)\)", page):
+            self.assertEqual(subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{sha}:{path}"]).returncode, 0, path)
+        self.assertEqual(run(sys.executable, self.script, "--kind", "audit").returncode, 2)
+
+    def test_errors(self):
+        self.assertIn("Exit codes", run(sys.executable, self.script, "--help").stdout)
+        r = run(sys.executable, self.script, "--frob")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Usage:", r.stderr)
+        self.assertEqual(run(sys.executable, self.script, "--commit", "no-such-ref", "--offline").returncode, 3)
+
+
 class ReleaseScriptTest(unittest.TestCase):
     def test_missing_or_bad_version_explains_itself(self):
         script = os.path.join(ROOT, "scripts", "release.sh")
