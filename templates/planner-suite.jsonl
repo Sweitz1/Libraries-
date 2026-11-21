@@ -1,0 +1,5 @@
+// A planner benchmark: for each goal, the skills the plan should use, in order.
+{"goal": "scrape https://example.com/news then summarize it in 3 sentences", "skills": ["scrape", "summarize"]}
+{"goal": "status of backups", "skills": ["service_status"]}
+// A goal that should be refused rather than guessed at:
+{"goal": "book me a flight", "refuse": true}

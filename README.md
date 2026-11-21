@@ -2,7 +2,40 @@
 
 Libra is a small GPT-style language model where **every piece is original code**. It uses no pretrained weights, no downloaded model, no API key and no subscription. You train it on your own text, and it runs on your own computer.
 
-The only dependency is **NumPy**. Everything else is in this repo. For a reviewer's map of every app, server, service and capability, with links to the code, see **[docs/REVIEW.md](docs/REVIEW.md)**.
+[![tests](https://github.com/Sweitz1/Libraries-/actions/workflows/test.yml/badge.svg)](https://github.com/Sweitz1/Libraries-/actions/workflows/test.yml)
+[![android](https://github.com/Sweitz1/Libraries-/actions/workflows/android.yml/badge.svg)](https://github.com/Sweitz1/Libraries-/actions/workflows/android.yml)
+[![release](https://img.shields.io/github/v/release/Sweitz1/Libraries-?include_prereleases&label=release)](https://github.com/Sweitz1/Libraries-/releases)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)
+
+The only dependency is **NumPy**. Everything else is in this repo.
+
+<table>
+<tr>
+<td width="33%" valign="top"><h3>🧠 The model</h3><p>A GPT-style transformer, autograd engine, tokenizer and optimizer, all written here. CPU or NVIDIA GPU.</p><p><a href="#training-on-your-own-text"><b>Train it →</b></a></p></td>
+<td width="33%" valign="top"><h3>📱 Phone and web app</h3><p>Chat, translate, run skills and goals from your phone. Native Android app with notifications; iPhone through Safari.</p><p><a href="docs/MOBILE.md"><b>Get the app →</b></a></p></td>
+<td width="33%" valign="top"><h3>🖥️ Debian server</h3><p>One command installs the service, nightly training, scheduled goals, Tailscale HTTPS and QR pairing.</p><p><a href="deploy/README.md"><b>Deploy it →</b></a></p></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><h3>🎯 Goal agent and jobs</h3><p>Plain-language goals planned into skill steps. Jobs survive restarts, wait for your approval and check their results.</p><p><a href="#goal-agent-plain-language-goals-run-with-your-skills"><b>Give it a goal →</b></a></p></td>
+<td width="33%" valign="top"><h3>🌙 Unattended training</h3><p>Collects text from sites you choose, filters it, trains, and keeps the new model only if it isn't worse.</p><p><a href="#automatic-training-from-the-web"><b>Set it up →</b></a></p></td>
+<td width="33%" valign="top"><h3>📂 Your files, with citations</h3><p>Answers grounded in your documents, quoted with line numbers. Says so when the answer isn't there.</p><p><a href="#your-files-as-a-knowledge-base-grounded-answers"><b>Add your files →</b></a></p></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><h3>🧩 Skills, MCP and APIs</h3><p>Built-in tools, your own plugins, MCP servers and OpenAPI imports, searchable up to a million skills.</p><p><a href="#skill-catalog-mcp-servers-web-apis-and-trust-controls"><b>Add skills →</b></a></p></td>
+<td width="33%" valign="top"><h3>🌍 Translation</h3><p>Translation memory, word alignment, language detection for 28 languages, romanization.</p><p><a href="#translation-and-language-tools"><b>Translate →</b></a></p></td>
+<td width="33%" valign="top"><h3>🕸️ Web scraper and crawler</h3><p>robots.txt, rate limits, CSS selectors, and a guard against reaching private addresses.</p><p><a href="#web-scraper-and-crawler"><b>Scrape a page →</b></a></p></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><h3>🔐 Trust and security</h3><p>Ask or deny rules by risk, per-device tokens, audit log. Web content can't trigger changes on its own.</p><p><a href="SECURITY.md"><b>Read the model →</b></a></p></td>
+<td width="33%" valign="top"><h3>📊 Benchmarks</h3><p>Measure the planner and the model before changing them; training can require behaviour not to drop.</p><p><a href="#benchmarks-measure-before-changing-things"><b>Run them →</b></a></p></td>
+<td width="33%" valign="top"><h3>💬 Discord and memory</h3><p>A Discord bot for your server, and long-term memory of facts and goal results.</p><p><a href="#discord"><b>Connect Discord →</b></a></p></td>
+</tr>
+</table>
+
+**More:** [Templates](templates) to copy · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/Sweitz1/Libraries-/releases)
+
+For a reviewer's map of every app, server, service and capability, with links to the code, see **[docs/REVIEW.md](docs/REVIEW.md)**.
 
 | File | What it is |
 |---|---|
@@ -25,6 +58,9 @@ The only dependency is **NumPy**. Everything else is in this repo. For a reviewe
 | `libra/webui/` | The phone/browser app served at `/` (no external files; works offline on your network) |
 | `libra/autonomy.py`, `libra/memory.py` | Autonomous plan → act → check → adjust loop with learned procedures; long-term memory |
 | `libra/discord.py`, `libra/websocket.py`, `libra/notify.py` | Discord bot (gateway + REST), a from-scratch WebSocket client, notifications (ntfy, Discord webhooks, any URL) |
+| `libra/jobs.py`, `libra/evaluate.py` | Durable jobs (resumable goals with approvals and checked results); benchmarks for the planner and the model |
+| `android/` | The Android app: pairing, Keystore sign-in, notifications ([docs/MOBILE.md](docs/MOBILE.md)) |
+| `templates/`, `scripts/` | Templates to copy (plugin, benchmark suites, training config); the release script |
 | `libra/agent.py` | Goal agent: plans plain-language goals into skill steps, runs them under trust rules and limits, schedules |
 | `libra/qr.py`, `libra/pair.py` | QR codes (from scratch) and phone pairing: best address + token as a scannable link |
 | `deploy/` | Debian installer (systemd services and timers, Tailscale, .local name, token, QR pairing), Caddy HTTPS example, setup guide |
@@ -59,7 +95,7 @@ cd Libraries-
 pip install -e .          # or just: pip install numpy, then use "python -m libra"
 ```
 
-Python 3.9+.
+Python 3.9+. Each [release](https://github.com/Sweitz1/Libraries-/releases) also has a ready-made wheel (`pip install libra_lm-*.whl`), the Android app (`libra.apk`) and `SHA256SUMS` to check them against.
 
 ## Minimum resources
 
@@ -726,6 +762,10 @@ python -m unittest discover -s tests -v
 3. **Training.** Cross-entropy loss measures how surprised the model is by the real next token. The autograd engine computes the gradient of that loss for every weight, and AdamW updates the weights.
 4. **Generation.** The model scores the next token, one is sampled, it is appended, and the process repeats.
 
+## Contributing and releases
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). [`templates/`](templates) has a plugin, benchmark suites and a training config to copy. Maintainers cut a release with `scripts/release.sh X.Y.Z`; pushing the tag builds and publishes the packages and the APK.
+
 ## License
 
-MIT
+[MIT](LICENSE)

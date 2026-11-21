@@ -1,0 +1,6 @@
+// A model benchmark. Lines starting with // are comments.
+// Multiple choice: the model should find choices[answer] the most likely continuation.
+{"prompt": "The capital of France is", "choices": [" Paris", " Tokyo", " Cairo"], "answer": 0, "tag": "facts"}
+{"prompt": "She", "choices": [" go home.", " goes home."], "answer": 1, "tag": "grammar"}
+// Generation: the model's reply must contain one of the expected strings.
+{"prompt": "Q: What colour is the sky on a clear day?\nA:", "expect": ["blue"], "max_tokens": 20}
