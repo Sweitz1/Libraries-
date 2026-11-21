@@ -21,7 +21,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 142 Python test functions in 22 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
+- **Tests:** 168 Python test functions in 25 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -214,10 +214,11 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_websocket.py`](../tests/test_websocket.py) | 3 | Frames, fragmentation, pings, close codes, bad handshakes |
 | [`test_discord.py`](../tests/test_discord.py) | 2 | A full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
 | [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
-| [`test_jobs.py`](../tests/test_jobs.py) | 12 | Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs); durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
+| [`test_jobs.py`](../tests/test_jobs.py) | 16 | Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs), including across several steps; a failed read step never falls back to a change; two runners on one job; a torn event line; durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
 | [`test_eval.py`](../tests/test_eval.py) | 3 | Planner suite scoring, likelihood scoring on a trained model, history deltas, the behaviour gate rejecting a model |
 | [`test_mobile.py`](../tests/test_mobile.py) | 4 | What the Android app relies on: the `libra://pair` link, one token in both links, the last training decision, the web app's hooks |
 | [`android/app/src/test`](../android/app/src/test/java/ai/libra/app) | 6 (JVM) | Pairing-link parsing and rejection; notification decisions (each event once, nothing on first check) |
+| [`test_proxy.py`](../tests/test_proxy.py) | 3 | Environment proxies ignored unless trusted; a trusted proxy still gets only public names; dataset downloads use the guard (section 13) |
 | [`test_isolation.py`](../tests/test_isolation.py) | 6 | Fixes from the second review (section 10): per-thread gradients, atomic checkpoints, honest validation |
 
 The end-to-end CLI checks are in [`.github/smoke.sh`](../.github/smoke.sh), and CI is defined in [`.github/workflows/test.yml`](../.github/workflows/test.yml). The phone app was also exercised by hand with Playwright (iPhone 13 profile): login, chat, translate, skills, agent, autonomous mode, training progress, pairing (the on-screen QR code decoded with OpenCV), dark mode, no horizontal overflow and no console errors.
@@ -282,7 +283,7 @@ The first external review was a static review of commit `d62c146`. Each of its f
 | — | "Verify that every route respects the same permission boundaries" | Audited: Discord chat (even for allowed users), autonomy, scheduled goals and the server all go through `SkillRegistry.run`. The only direct writes are memory `remember` and `forget` from allow-listed Discord users, which is deliberate: the allow list is the approval | `RouteAuditTest` |
 
 **Residual risks**, for the next review:
-- **Proxies:** when an `HTTP(S)_PROXY` is configured for a destination, the proxy makes the connection, so only the name check applies.
+- **Proxies:** when an `HTTP(S)_PROXY` is configured for a destination, the proxy makes the connection, so only the name check applies. *(Closed in section 13: proxies are ignored unless trusted.)*
 - **MCP over HTTP and Discord's REST API** use their configured URLs directly. These are trusted configuration, often `localhost`, so they bypass the private-address guard on purpose.
 - **A device token in browser storage** can still be read by script running in the app's origin. CSP `script-src 'self'` limits that, and revocation contains it.
 - **Rate limits and connection caps are per address**, so many attackers behind one NAT share a budget, and spread-out addresses aren't limited together.
@@ -339,3 +340,29 @@ This review read the documentation at commit `d62c146`, which predates sections 
 | Execute the test suite; exercise the real deployment | The suite runs in CI on every push (138 tests on Python 3.9–3.13). A real Debian/systemd/Tailscale/Discord/GPU deployment is still unverified |
 
 The review's conclusion stands: Libra isn't production-secure until it has been deployed and tested on real hardware. The model is also small.
+
+## 13. Response to the fifth review ("Continued Review")
+
+This review read commit `1db5559`, the one pinned in [VERIFY.md](VERIFY.md). It took the residual risks from sections 9–12 as given and asked for tests of the failure paths. Its points:
+
+| Point | Status | Change and tests |
+|---|---|---|
+| **P0** An environment proxy can reach internal hosts: the proxy resolves the name, so the private-address check never sees the real address | **Real; fixed.** Reproduced first: with `HTTP_PROXY` set, `Fetcher().get("http://intranet.libra-test.invalid/")` went through a fake proxy and returned its "internal secret". A second path had no guard at all: `libra data --url` and `--gutenberg` downloaded with plain `urlopen` | Fetches now connect directly and ignore environment proxies unless `LIBRA_USE_PROXY=1` says the proxy is trusted. Even then, a name must resolve locally to public addresses, or it is refused instead of being handed to the proxy. Dataset downloads use the same guarded fetcher, and `libra data --allow-private` covers them. [`web.py`](../libra/web.py) `_proxy_trusted`, `_check_url`; [`dataset.py`](../libra/dataset.py) `fetch`. Tests: [`test_proxy.py`](../tests/test_proxy.py) (all three failed before the fix) |
+| **P0** Two processes on the same job | Already safe (an exclusive `flock` per job, section 11); **now tested** | `test_a_second_runner_on_the_same_job_is_refused`: while a child process runs the job, a second `run` and an `approve` are refused. Every item runs exactly once and the report is sent once |
+| **P0** Outside content reaching a change through several steps | Already safe (taint follows `inputs`); **now tested** | `test_outside_content_stays_outside_across_several_steps`: fetch → digest (plain code) → send still waits for a person, and names the step it came through |
+| **P0** Fallbacks escalating to a change or to an unscoped skill | Already safe (alternatives are read-only and stay within a goal's scope); **now tested** | `test_a_failed_read_step_never_falls_back_to_a_change`: matching `write` and `danger` skills, even allowed ones, are never tried; a scoped goal tries nothing outside its list |
+| **P0** Approvals survive a restart | Already tested (section 11) | `test_approval_checkpoint_survives_a_restart_and_is_used_once` |
+| Durable event journal | **Partly true; fixed.** `job.json` was written atomically, but event lines weren't synced, and a torn last line made `events()` raise | Each event is flushed and `fsync`ed. A torn last line is skipped; a damaged line elsewhere shows as an `unreadable` event instead of being dropped. [`jobs.py`](../libra/jobs.py) `_event`, `events`. Test: `test_a_torn_last_event_line_is_ignored` (failed before the fix) |
+| Idempotency keys and reconciliation for outside actions | **Not done.** Today an interrupted change is never re-run blindly: it waits for a person (section 11). That is safe, but it needs a person | It would take a key per step attempt passed to skills (`job id:step:attempt`), and an optional `reconcile(key)` hook on a skill that can check "did this already happen?" before a resume |
+| Check results against evidence of the outcome, not only the output text | **Not done.** Results are checked by rules read from the goal, plus the output's SHA-256 | It would take skills returning structured evidence (an id, a URL, a file hash) that a later read-only check confirms |
+| **P1** HttpOnly cookie sessions instead of a token in browser storage | **Not done.** The token stays in `localStorage`, limited by CSP `script-src 'self'` and per-device revocation | It would take a `Set-Cookie` session (HttpOnly, Secure, SameSite=Strict) on sign-in, plus a CSRF check on `POST`s |
+| **P1** Sandbox plugins and MCP servers | **Not done; by design.** They run with your permissions, which is documented in SECURITY.md | It would take a separate process per plugin with limited rights, which on Debian means systemd-run or bubblewrap |
+| **P1** Manipulating the planner through wording | Known (residual risk 6). The outside-content gate means wording inside fetched content can't trigger a change | — |
+| Hybrid semantic retrieval, adaptive replanning, procedural memory, broader evals | **Not done**, except that procedural memory exists (learned procedures, section 4) | Semantic retrieval would use from-scratch co-occurrence vectors trained on the user's own files; broader evals would add more suites to `libra eval` |
+
+**Residual risks**, for the next review:
+- **A trusted proxy (`LIBRA_USE_PROXY=1`)** resolves the name again itself. Split-horizon DNS, where the proxy sees a different address than Libra, is the proxy's responsibility. That's why the setting exists only for proxies that enforce their own destination rules.
+- **MCP over HTTP and Discord's REST API** still use their configured URLs directly (trusted configuration).
+- **External changes aren't idempotent:** after a crash, a person decides whether an interrupted change already happened.
+- **Not yet run for real:** a deployment on Debian with systemd, Tailscale and Discord, and a proxy on a real corporate network.
+

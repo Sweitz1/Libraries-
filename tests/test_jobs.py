@@ -251,6 +251,46 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(sends["n"], 1)  # a change is never retried automatically
         self.assertEqual([s["status"] for s in job["steps"]], ["done", "failed", "skipped"])
 
+    def test_a_second_runner_on_the_same_job_is_refused(self):
+        from libra import jobs
+
+        env = dict(os.environ, PYTHONPATH=ROOT, LIBRA_TEST_SLOW_DIGEST="0.4")
+        script = CHILD.format(tests=os.path.join(ROOT, "tests"), state=self.state, allow=True)
+        child = subprocess.Popen([sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, text=True)
+        try:
+            job_id = child.stdout.readline().strip()
+            deadline = time.time() + 30
+            while not jobs.is_running(job_id) and time.time() < deadline:
+                time.sleep(0.02)
+            reg = build_registry(self.state, allow_send=True)
+            with self.assertRaises(jobs.JobError):  # another process holds the job: no second copy runs
+                jobs.run(job_id, reg, retry_delay=0)
+            with self.assertRaises(jobs.JobError):  # nor can its state be changed underneath it
+                jobs.approve(job_id)
+            child.wait(60)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.stdout.close()
+        self.assertEqual(jobs.get(job_id)["status"], "done")
+        self.assertEqual(calls(self.state, "collect"), [""])
+        self.assertEqual(len(calls(self.state, "digest")), 3)  # each item digested exactly once
+        self.assertEqual(calls(self.state, "send"), ["3"])
+
+    def test_a_torn_last_event_line_is_ignored(self):
+        from libra import jobs
+
+        job = jobs.create(GOAL, build_registry(self.state))
+        path = os.path.join(jobs._dir(job["id"]), "events.jsonl")
+        good = len(jobs.events(job["id"]))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write('{"at": "2026-11-21T00:00:00", "event": "step do')  # a crash partway through an append
+        self.assertEqual(len(jobs.events(job["id"])), good)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write('\n{"event": "later"}\n')  # damage that isn't at the end is reported, not dropped
+        kinds = [e["event"] for e in jobs.events(job["id"])]
+        self.assertEqual(kinds[-2:], ["unreadable", "later"])
+
     def test_cancel_and_time_limit(self):
         from libra import jobs
 
@@ -348,6 +388,49 @@ class PermissionsAndOutsideContentTest(unittest.TestCase):
         job = jobs.run(jobs.create("fetch the page then note down the reminder", self.reg)["id"], self.reg)
         self.assertEqual(job["status"], "done")
         self.assertEqual(calls(self.state, "note"), ["water the plants"])
+
+    def test_outside_content_stays_outside_across_several_steps(self):
+        from libra import jobs
+
+        # fetch (outside) -> digest (read, plain code) -> send (write): the digest is still outside content
+        job = jobs.run(jobs.create("fetch the page then digest it then send the report", self.reg)["id"], self.reg)
+        self.assertEqual((job["status"], job["waiting"]["kind"]), ("waiting", "untrusted_input"))
+        self.assertTrue(job["steps"][1]["untrusted"])
+        self.assertIn("step 2", job["waiting"]["reason"])
+        self.assertEqual(calls(self.state, "send"), [])
+
+    def test_a_failed_read_step_never_falls_back_to_a_change(self):
+        from libra import jobs
+
+        @self.reg.skill("lookup_weather", "Look up the weather forecast", risk="read",
+                        router=lambda m: {} if "weather" in m.lower() else None)
+        def lookup_weather():
+            raise RuntimeError("the forecast service is down")
+
+        for risk, name in (("write", "post_weather"), ("danger", "wipe_weather")):
+            @self.reg.skill(name, "Look up the weather forecast and post it", risk=risk)
+            def changer(name=name):
+                with open(os.path.join(self.state, name), "a") as f:
+                    f.write("ran\n")
+                return "changed"
+            self.reg.policy.set(name, "allow")  # even an allowed change is not an alternative
+
+        @self.reg.skill("weather_almanac", "Look up the weather forecast in the almanac", risk="read")
+        def weather_almanac():
+            return "sunny"
+
+        job = jobs.run(jobs.create("look up the weather forecast", self.reg)["id"], self.reg, retry_delay=0)
+        tried = job["steps"][0]["tried"]
+        self.assertNotIn("post_weather", tried)
+        self.assertNotIn("wipe_weather", tried)
+        self.assertEqual(calls(self.state, "post_weather") + calls(self.state, "wipe_weather"), [])
+
+        # a scoped goal doesn't fall back to a read skill it wasn't allowed either
+        job = jobs.run(jobs.create("look up the weather forecast", self.reg,
+                                   permissions={"skills": ["lookup_weather"], "preapproved": []})["id"],
+                       self.reg, retry_delay=0)
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(job["steps"][0]["tried"], ["lookup_weather"])
 
     def test_saved_goals_are_limited_to_their_own_skills(self):
         from libra import agent, jobs

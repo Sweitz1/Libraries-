@@ -11,6 +11,7 @@ import http.client
 import ipaddress
 import json
 import re
+import os
 import socket
 import ssl
 import time
@@ -73,6 +74,13 @@ def _is_private_host(host: str) -> bool:
     except socket.gaierror:
         return False  # let the request fail normally
     return any(_blocked_ip(info[4][0]) for info in infos)
+
+
+def _resolves(host: str) -> bool:
+    try:
+        return bool(socket.getaddrinfo(host, None))
+    except socket.gaierror:
+        return False
 
 
 class PrivateAddressError(OSError):
@@ -144,8 +152,21 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
                             context=self._context)
 
 
+def _proxy_trusted() -> bool:
+    """Environment proxies are used only when ``LIBRA_USE_PROXY=1`` says they're trusted.
+
+    Through a proxy, the proxy resolves the name and makes the connection, so Libra can't pin the
+    address it checked. A name that only the proxy can resolve (an internal host) would get past a check
+    done with local DNS. So by default fetches connect directly and ignore HTTP(S)_PROXY; set
+    LIBRA_USE_PROXY=1 only for a proxy that enforces its own destination rules."""
+    return os.environ.get("LIBRA_USE_PROXY") == "1"
+
+
 def _uses_proxy(url: str) -> bool:
-    """True if urllib would send ``url`` through a proxy (HTTP(S)_PROXY, honouring NO_PROXY)."""
+    """True if this fetch goes through a proxy: a trusted one is configured (HTTP(S)_PROXY, honouring
+    NO_PROXY, with LIBRA_USE_PROXY=1)."""
+    if not _proxy_trusted():
+        return False
     parts = urlsplit(url)
     proxies = urllib.request.getproxies()
     if parts.scheme not in proxies:
@@ -174,7 +195,8 @@ class Fetcher:
         # Direct connections check the address they actually connect to (no DNS-rebinding window).
         self._direct = urllib.request.build_opener(_Redirect, urllib.request.ProxyHandler({}),
                                                    _PinnedHTTPHandler(allow_private), _PinnedHTTPSHandler(allow_private))
-        # Through a configured proxy the proxy makes the connection, so only the name check applies.
+        # Through a trusted proxy (LIBRA_USE_PROXY=1) the proxy makes the connection, so the name check in
+        # _check_url is all Libra can do; it then also refuses names that don't resolve here.
         self._proxied = urllib.request.build_opener(_Redirect)
 
     def _open(self, req):
@@ -194,6 +216,10 @@ class Fetcher:
         host = urlsplit(norm).hostname or ""
         if not self.allow_private and _is_private_host(host):
             raise FetchError(f"refusing private or local address {host} (use allow_private / --allow-private)")
+        if not self.allow_private and _uses_proxy(norm) and not _resolves(host):
+            # the proxy might resolve it to an internal host that Libra can't see: fail closed
+            raise FetchError(f"refusing {host}: it doesn't resolve here, so it can't be checked before the proxy "
+                             "connects to it")
         return norm
 
     def _robots_for(self, url: str):
