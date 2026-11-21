@@ -34,6 +34,16 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 - Update the README or `docs/` when behaviour changes, and add a line to `CHANGELOG.md` under *Unreleased*.
 - Open a pull request; the template lists what reviewers check. CI must be green.
 
+**Working with Claude Code?** The repository has project skills in [`.claude/skills/`](.claude/skills):
+
+| Skill | For |
+|---|---|
+| `/verify` | Runs the checks for the parts you changed. Claude also runs it before each commit |
+| `/run-libra` | Starts a server and drives the app in a headless browser |
+| `/add-libra-skill` | Adds a Libra skill the right way: risk, outside content, tests, planner suite |
+| `/answer-review` | Works through a code review point by point and records the response in `docs/REVIEW.md` |
+| `/release X.Y.Z` | Cuts a release. You start it yourself: Claude never starts it on its own |
+
 Starting points: [`templates/`](templates) has a plugin, an evaluation suite and a training config to copy. [`docs/REVIEW.md`](docs/REVIEW.md) maps every part of the code.
 
 ## Releasing (maintainers)
