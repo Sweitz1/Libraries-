@@ -68,7 +68,10 @@ jobs:
           LIBRA_KEYSTORE_PASSWORD: ${{ secrets.LIBRA_KEYSTORE_PASSWORD }}
           LIBRA_KEY_ALIAS: ${{ secrets.LIBRA_KEY_ALIAS }}
           LIBRA_KEY_PASSWORD: ${{ secrets.LIBRA_KEY_PASSWORD }}
-        run: gradle --no-daemon testDebugUnitTest lintDebug assembleRelease
+        # assembleDebug also creates the debug key that release builds fall back to without a release key
+        run: |
+          [ -n "${LIBRA_KEYSTORE_PATH:-}" ] || echo "::warning::No release signing key (LIBRA_KEYSTORE_BASE64): this APK is signed with a temporary debug key and later APKs won't install over it."
+          gradle --no-daemon testDebugUnitTest lintDebug assembleDebug assembleRelease
       - run: mkdir out && cp android/app/build/outputs/apk/release/app-release.apk out/libra.apk
       - uses: actions/upload-artifact@v4
         with:
@@ -99,4 +102,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" artifacts/* --title "Libra ${GITHUB_REF_NAME#v}" --notes-file notes.md
+        run: |
+          # Re-running a tag's workflow (e.g. after adding the signing key) replaces the files.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" artifacts/* --title "Libra ${GITHUB_REF_NAME#v}" --notes-file notes.md
+          fi
