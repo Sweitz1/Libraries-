@@ -27,6 +27,7 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - **Autonomous goals run as durable jobs**, and those jobs adjust their own plan when the result misses the goal's wording (at most twice, read-only skills within the goal's permissions), then learn the plan that worked. Saved autonomous goals and the app's Autonomous button now survive restarts, pause for approval, and keep to their permissions and pre-approvals. Before, a pre-approved change stopped them.
 
 - **A Claude Code plugin marketplace** (`.claude-plugin/marketplace.json`): the project skills install as one plugin with `/plugin marketplace add Sweitz1/Libraries-` and `/plugin install libra-skills@libra`. `scripts/release.sh` keeps its version in step.
+- **A `tutor` skill for Claude Code** (`/tutor <change>` or `/tutor lesson <n>`): it plans the change as small steps that you write yourself, gives hints that never give the answer, and checks each step with Libra's tests. It never edits your code. The idea comes from wanna-learn.
 
 ### Fixed
 - A damaged job file (cut off, or not a job) was hidden from `libra jobs list` and the app, and failed with a raw JSON error; the server answered "n must be a number". It's now listed as `damaged`, with the file's path, and resuming carries on with the other jobs.

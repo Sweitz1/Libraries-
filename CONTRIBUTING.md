@@ -54,6 +54,7 @@ To write your own skill, start from [`templates/claude-skill/`](templates/claude
 | `/summarize-changes` | Summarizes uncommitted changes and flags risks, for a commit message or a quick review |
 | `api-conventions` | Not run as a command: Claude follows it when writing or changing API endpoints and clients (paths, the error format, status codes, limits, auth and trust) |
 | `/deploy user@server [version]` | Upgrades your Debian server with the installer, checks it came up, and rolls back if not (`scripts/deploy.sh`, with `--dry-run` and documented exit codes). You start it yourself, and it runs in its own context |
+| `/tutor <change> \| lesson <n>` | Teaches instead of doing: plans the change in small steps that you write, with hints that never give the answer, and checks each step with the tests (`/tutor hint`, `/tutor check`). Progress is kept in `.libra-tutor/` |
 | `/roll-dice` | The guide's example, with a fair dice-notation script (`2d6`, `3d8+4`): a small skill with `scripts/` and `references/` |
 | `/libra-data` | Validates configs, suites, trust rules, goals and plugins (`scripts/validate.sh`), and turns notes and chat exports into a training dataset (`scripts/process.py`) |
 | `/yagni` · `/reducer` | Keep new changes minimal (plan, failing test first, nothing extra), and remove moving parts from existing code without changing behaviour (a behaviour ledger, then reversible slices). Inspired by [mintuz/skills](https://github.com/mintuz/skills), written for Libra |

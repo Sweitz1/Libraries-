@@ -87,3 +87,6 @@ android/app/build/
 android/local.properties
 *.jks
 clients/java/target/
+
+# Claude Code tutor skill: your progress through a guide
+.libra-tutor/
