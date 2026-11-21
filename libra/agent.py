@@ -385,6 +385,39 @@ def _subst(args: dict, prev: str, item: str | None = None) -> dict:
     return out
 
 
+def _uses_input(step: Step) -> bool:
+    return (step.foreach and not step.items) or any(isinstance(v, str) and ("{prev}" in v or "{item}" in v)
+                                                    for v in step.args.values())
+
+
+def _skill_untrusted(registry, name: str) -> bool:
+    try:
+        return registry.get(name).untrusted_output
+    except KeyError:
+        return True
+
+
+def _outside_content_gate(registry, step: Step, tainted: bool, i: int, confirmed: list | None = None) -> str:
+    """A change fed by outside content (web, API, memories) needs a person: "" if it may go on.
+    When a person confirmed it here, True is appended to ``confirmed``."""
+    if not tainted or not _uses_input(step):
+        return ""
+    try:
+        skill = registry.get(step.skill)
+    except KeyError:
+        return ""
+    if skill.risk == "read":
+        return ""
+    confirm = getattr(registry, "confirm", None)
+    if confirm is not None and confirm(skill, step.args):
+        if confirmed is not None:
+            confirmed.append(True)
+        return ""
+    return (f"step {i + 1} ({step.skill}, a {skill.risk} skill) would act on content from outside (the previous "
+            "step's output). That needs a person: run it in the terminal to be asked, or as a job "
+            "(libra jobs start …) and approve it")
+
+
 def execute(p: Plan, registry, max_steps: int = 10, max_items: int = 5, max_seconds: float = 300,
             name: str = "", log=None) -> AgentRun:
     now = lambda: _dt.datetime.now().astimezone().isoformat(timespec="seconds")  # noqa: E731
@@ -393,7 +426,7 @@ def execute(p: Plan, registry, max_steps: int = 10, max_items: int = 5, max_seco
         run.status, run.problems, run.finished = "invalid", list(p.problems), now()
         return run
     t0 = time.time()
-    prev_text, prev_data = "", None
+    prev_text, prev_data, tainted = "", None, False
     for i, step in enumerate(p.steps):
         if i >= max_steps:
             run.status = "stopped"
@@ -412,6 +445,12 @@ def execute(p: Plan, registry, max_steps: int = 10, max_items: int = 5, max_seco
                 run.steps.append(StepResult(step.clause, step.skill, False, "nothing to go through", 0.0))
                 run.status = "stopped"
                 break
+            gate = _outside_content_gate(registry, step, tainted and not step.items, i)
+            if gate:
+                run.steps.append(StepResult(step.clause, step.skill, False, gate, 0.0))
+                run.status = "blocked"
+                run.problems.append(gate)
+                break
             texts, datas, ok, blocked = [], [], True, ""
             for item in items:
                 r = registry.run(step.skill, _subst(step.args, prev_text, item))
@@ -426,11 +465,20 @@ def execute(p: Plan, registry, max_steps: int = 10, max_items: int = 5, max_seco
                                 round(time.time() - s0, 2), len(items))
             prev_text, prev_data = "\n\n".join(texts), datas
         else:
-            r = registry.run(step.skill, _subst(step.args, prev_text))
+            confirmed = []
+            gate = _outside_content_gate(registry, step, tainted, i, confirmed)
+            if gate:
+                run.steps.append(StepResult(step.clause, step.skill, False, gate, 0.0))
+                run.status = "blocked"
+                run.problems.append(gate)
+                break
+            # the person who just confirmed isn't asked a second time; deny rules still apply
+            r = registry.run(step.skill, _subst(step.args, prev_text), approved=bool(confirmed))
             ok, blocked = r.ok, ("approval" in r.text or "is blocked" in r.text) and not r.ok
             result = StepResult(step.clause, step.skill, r.ok, r.text[:6000], round(time.time() - s0, 2))
             prev_text, prev_data = r.text, r.data
         run.steps.append(result)
+        tainted = _skill_untrusted(registry, step.skill) or (tainted and _uses_input(step))
         if not result.ok:
             run.status = "blocked" if blocked else "stopped"
             if blocked:
@@ -502,7 +550,11 @@ def is_due(spec: str | None, last: str | None, now: _dt.datetime | None = None) 
     return last_t is None or last_t < slot
 
 
-def add_goal(name: str, goal: str, every: str | None = None, registry=None, autonomous: bool = False) -> Plan:
+def add_goal(name: str, goal: str, every: str | None = None, registry=None, autonomous: bool = False,
+             allow=None) -> Plan:
+    """Save a goal. Its permissions are fixed now: it may only ever use the skills its plan uses today
+    (so a later re-plan can't drift into other skills), and ``allow`` lists skills from that plan that
+    may run without asking, even on outside content. Deny rules still win."""
     if not re.fullmatch(r"[A-Za-z0-9][\w-]{0,40}", name):
         raise ValueError("goal names: letters, digits, - and _ (up to 40)")
     every = check_schedule(every)
@@ -513,9 +565,15 @@ def add_goal(name: str, goal: str, every: str | None = None, registry=None, auto
         p = _repair_plan(p, registry, [])
     if p is not None and not p.ok:
         raise ValueError("the goal can't be planned yet:\n" + "\n".join(f"  - {x}" for x in p.problems))
+    allow = sorted({a.strip() for a in (allow or []) if a and a.strip()})
+    scope = sorted({st.skill for st in p.steps}) if p is not None else None
+    if allow and scope is not None and not set(allow) <= set(scope):
+        raise ValueError(f"--allow names skills this goal doesn't use: {', '.join(sorted(set(allow) - set(scope)))} "
+                         f"(it uses: {', '.join(scope)})")
     with STATE_LOCK:
         goals = load_goals()
         goals[name] = {"goal": goal, "every": every, "enabled": True, "autonomous": bool(autonomous),
+                       "permissions": {"skills": scope, "preapproved": allow},
                        "created": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                        "last_run": goals.get(name, {}).get("last_run")}
         save_goals(goals)
@@ -551,6 +609,11 @@ def recent_runs(n: int = 20) -> list[dict]:
     return [json.loads(l) for l in reversed(lines) if l.strip()]
 
 
+def goal_permissions(name: str) -> dict | None:
+    """A saved goal's permissions (None for goals saved before permissions existed: no limits)."""
+    return (load_goals().get(name) or {}).get("permissions") if name else None
+
+
 def run_goal(goal: str, registry, name: str = "", log=None, autonomous: bool = False, **limits) -> AgentRun:
     """Run a goal. Plain goals run as durable jobs (see :mod:`libra.jobs`): they survive a restart,
     pause for approval and finish with a checked result. Autonomous goals use the adaptive loop."""
@@ -562,11 +625,10 @@ def run_goal(goal: str, registry, name: str = "", log=None, autonomous: bool = F
         from . import jobs
 
         try:
-            job = jobs.create(goal, registry, name=name, **limits)
-        except ValueError:
-            p = plan(goal, registry)
+            job = jobs.create(goal, registry, name=name, permissions=goal_permissions(name), **limits)
+        except ValueError as exc:
             r = AgentRun(goal, name, _dt.datetime.now().astimezone().isoformat(timespec="seconds"), status="invalid",
-                         problems=list(p.problems))
+                         problems=[str(exc)])
         else:
             r = jobs.to_run(jobs.run(job["id"], registry, log=log))
     record(r)

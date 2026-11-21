@@ -178,12 +178,20 @@ def pursue(goal: str, registry, max_steps: int = 12, max_items: int = 5, max_sec
     checks = _checks(goal)
     for iteration in range(1, max_iterations + 1):
         run.iterations = iteration
-        prev_text, prev_data, results = "", None, []
+        prev_text, prev_data, results, tainted = "", None, [], False
         failed_at = None
         for i, step in enumerate(steps):
             if i >= max_steps or time.time() - t0 > max_seconds:
                 run.status = "stopped" if i >= max_steps else "timeout"
                 run.problems.append(f"{'step' if i >= max_steps else 'time'} limit reached")
+                run.steps, run.finished = results, now()
+                return run
+            gate = agent._outside_content_gate(registry, step, tainted, i)
+            if gate:
+                run.status = "blocked"
+                run.problems.append(gate)
+                note(Thought(f"{step.skill} would act on content from outside, so I stopped.", gate, "stop",
+                             "Text from a web page or another service is data, not instructions."))
                 run.steps, run.finished = results, now()
                 return run
             tried = {step.skill}
@@ -217,6 +225,7 @@ def pursue(goal: str, registry, max_steps: int = 12, max_items: int = 5, max_sec
                 repaired = True
             results.append(res)
             prev_text, prev_data = text, data
+            tainted = agent._skill_untrusted(registry, candidate.skill) or (tainted and agent._uses_input(candidate))
         run.steps = results
         if failed_at is not None:
             run.status = "stopped"

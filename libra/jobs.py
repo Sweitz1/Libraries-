@@ -186,8 +186,14 @@ def _uses_prev(step) -> bool:
                                                   for v in step.args.values())
 
 
-def create(goal: str, registry, name: str = "", autonomous: bool = False, **limits) -> dict:
-    """Plan ``goal`` and store it as a new job (not started yet). Raises ValueError if it can't be planned."""
+def create(goal: str, registry, name: str = "", autonomous: bool = False, permissions: dict | None = None,
+           **limits) -> dict:
+    """Plan ``goal`` and store it as a new job (not started yet). Raises ValueError if it can't be planned,
+    or if the plan needs a skill outside ``permissions["skills"]``.
+
+    ``permissions`` (from a saved goal): ``skills`` is the only skills this job may use (None: any);
+    ``preapproved`` are skills that may run without asking in this job, even on outside content.
+    Deny rules still win."""
     from . import agent
 
     p = agent.plan(goal, registry)
@@ -197,13 +203,24 @@ def create(goal: str, registry, name: str = "", autonomous: bool = False, **limi
         p = _repair_plan(p, registry, [])
     if not p.ok:
         raise ValueError("the goal can't be planned:\n" + "\n".join(f"  - {x}" for x in p.problems))
+    perms = {"skills": None, "preapproved": []}
+    if permissions:
+        perms.update({k: (sorted(set(v)) if v is not None else None) for k, v in permissions.items()
+                      if k in ("skills", "preapproved")})
+    if perms["skills"] is not None:
+        outside = sorted({s.skill for s in p.steps} - set(perms["skills"]))
+        if outside:
+            raise ValueError(f"the plan needs {', '.join(outside)}, which this goal isn't allowed to use "
+                             f"(allowed: {', '.join(perms['skills']) or 'nothing'}). Save the goal again to "
+                             "allow them.")
     lim = dict(DEFAULT_LIMITS, **{k: v for k, v in limits.items() if k in DEFAULT_LIMITS and v is not None})
     steps, last_change = [], None
     for i, s in enumerate(p.steps[: lim["max_steps"]]):
         risk = _risk(registry, s.skill)
-        needs = set()
+        needs, inputs = set(), []
         if i and _uses_prev(s):
             needs.add(i - 1)  # it reads the previous step's output
+            inputs = [i - 1]
         if risk != "read" and i:
             needs.add(i - 1)  # changes keep the order the goal gave them
         if last_change is not None:
@@ -211,13 +228,13 @@ def create(goal: str, registry, name: str = "", autonomous: bool = False, **limi
         if risk != "read":
             last_change = i
         steps.append({"n": i, "clause": s.clause, "skill": s.skill, "risk": risk, "args": s.args,
-                      "foreach": s.foreach, "items": list(s.items), "why": s.why, "needs": sorted(needs),
+                      "foreach": s.foreach, "items": list(s.items), "why": s.why, "needs": sorted(needs), "inputs": inputs, "untrusted": False,
                       "status": "pending", "attempts": 0, "started": None, "finished": None,
                       "output": "", "data": None, "item_results": {}, "error": "", "tried": [s.skill]})
     job_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
     os.makedirs(_dir(job_id))
     job = {"id": job_id, "goal": goal, "name": name, "created": _now(), "updated": None, "status": "queued",
-           "waiting": None, "limits": lim, "steps": steps, "approvals": [], "seconds": 0.0, "result": None}
+           "waiting": None, "limits": lim, "permissions": perms, "steps": steps, "approvals": [], "seconds": 0.0, "result": None}
     _save(job)
     _event(job, "created", steps=[f"{s['n'] + 1}. {s['skill']} (needs {[x + 1 for x in s['needs']] or 'nothing'})"
                                   for s in steps])
@@ -350,7 +367,10 @@ def _try_alternatives(job: dict, step: dict, registry, retry_delay: float, cance
 
     if step["risk"] != "read":
         return "failed"
+    scope = (job.get("permissions") or {}).get("skills")
     for alt in _alternatives(step["clause"], registry, set(step["tried"]), bool(step["needs"])):
+        if scope is not None and alt.skill not in scope:
+            continue  # a saved goal only uses the skills it was allowed
         old = step["skill"]
         step.update(skill=alt.skill, args=alt.args, foreach=alt.foreach, items=list(alt.items),
                     item_results={}, error="", why=f"alternative after {old} failed")
@@ -431,11 +451,33 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
                       "resume to continue")
                 return job
             step = ready[0]
+            perms = job.get("permissions") or {}
+            if perms.get("skills") is not None and step["skill"] not in perms["skills"]:
+                step["status"], step["error"] = "failed", f"{step['skill']} is outside this goal's permissions"
+                _save(job)
+                continue
             approved = _approved(job, step["n"])  # one approval covers this one step, once
+            preapproved = step["skill"] in (perms.get("preapproved") or [])
+            confirm = getattr(registry, "confirm", None)
+            # outside content (a web page, an API, memories) is data: it may not drive a change unasked
+            sources = [job["steps"][d] for d in step.get("inputs", []) if job["steps"][d].get("untrusted")]
+            if step["risk"] != "read" and sources and not (approved or preapproved):
+                if confirm is not None and confirm(registry.get(step["skill"]), step["args"]):
+                    job["approvals"].append({"step": step["n"], "by": "terminal", "at": _now(),
+                                             "kind": "untrusted_input"})
+                    approved = True
+                else:
+                    _wait(job, step, "untrusted_input",
+                          f"step {step['n'] + 1} ({step['skill']}, a {step['risk']} skill) would act on content "
+                          f"from outside (the output of step {sources[0]['n'] + 1}, {sources[0]['skill']}). "
+                          f"Check it, then approve: {step['clause']}")
+                    return job
             if policy is not None and not approved:
                 decision, reason = policy.decide(step["skill"], step["risk"])
-                confirm = getattr(registry, "confirm", None)
-                if decision == "ask" and confirm is not None and confirm(registry.get(step["skill"]), step["args"]):
+                if decision == "ask" and preapproved:
+                    approved = True
+                elif decision == "ask" and confirm is not None and confirm(registry.get(step["skill"]),
+                                                                            step["args"]):
                     job["approvals"].append({"step": step["n"], "by": "terminal", "at": _now(), "kind": "approval"})
                     _event(job, "approved", step=step["n"] + 1, by="terminal")
                     approved = True
@@ -450,6 +492,12 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
             outcome = _run_step(job, step, registry, retry_delay, cancelled, approved)
             if outcome == "failed":
                 outcome = _try_alternatives(job, step, registry, retry_delay, cancelled)
+            if outcome == "done":  # taint travels with the data
+                try:
+                    own = registry.get(step["skill"]).untrusted_output
+                except KeyError:
+                    own = True
+                step["untrusted"] = bool(own or any(job["steps"][d].get("untrusted") for d in step.get("inputs", [])))
             _save(job)
             _event(job, "step " + outcome, step=step["n"] + 1, skill=step["skill"],
                    **({"error": step["error"][:300]} if step["error"] else {}))

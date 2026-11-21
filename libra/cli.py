@@ -631,7 +631,10 @@ def cmd_agent(args) -> None:
         if len(items) < 2:
             raise SystemExit('usage: libra agent add NAME "goal" [--every daily@07:00]')
         p = agent.add_goal(items[0], " ".join(items[1:]), args.every, _registry(args, interactive=False),
-                           autonomous=args.auto)
+                           autonomous=args.auto, allow=args.allow)
+        perms = agent.goal_permissions(items[0]) or {}
+        print(f"may use only: {', '.join(perms.get('skills') or [])}"
+              + (f"; runs without asking: {', '.join(perms['preapproved'])}" if perms.get("preapproved") else ""))
         print(p.describe())
         print(f"\nsaved as {items[0]!r}" + (f", runs {args.every}" if args.every else " (run it with: libra agent "
                                                                                      f"start {items[0]})"))
@@ -722,6 +725,32 @@ def cmd_jobs(args) -> None:
         raise SystemExit(str(exc))
     except ValueError as exc:
         raise SystemExit(str(exc))
+
+
+def cmd_eval(args) -> None:
+    from . import evaluate
+
+    if args.action == "history":
+        rows = evaluate.history()
+        if not rows:
+            print("no results yet (libra eval plan, or libra eval model <checkpoint>)")
+        for r in rows[-args.n:]:
+            what = r.get("suite") if r["kind"] == "plan" else f"{os.path.basename(r.get('model', ''))}@{r.get('version')}"
+            print(f"  {r['at'][:16].replace('T', ' ')}  {r['kind']:<5} {what:<36} "
+                  + "  ".join(f"{k}={v}" for k, v in evaluate.headline(r).items() if v is not None))
+        return
+    if args.action == "plan":
+        result = evaluate.plan_suite(_registry(args, interactive=False), args.suite or evaluate.DEFAULT_PLAN_SUITE)
+    else:
+        if not args.model:
+            raise SystemExit("usage: libra eval model <checkpoint> [--text heldout.txt] [--suite suite.jsonl]")
+        result = evaluate.evaluate_model(args.model, args.text, None if args.no_suite else
+                                         (args.suite or evaluate.DEFAULT_MODEL_SUITE))
+    prev = None if args.no_record else evaluate.record(result)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(evaluate.describe(result, prev))
 
 
 def cmd_discord(args) -> None:
@@ -1089,6 +1118,8 @@ def build_parser() -> argparse.ArgumentParser:
     ag.add_argument("items", nargs="*", help="the goal (plan/run), or NAME and goal (add), or NAME (start/remove)")
     ag.add_argument("--every", help="add: hourly, daily, weekly, 30m, 6h, daily@07:00, weekdays@08:30, weekly@09:00")
     ag.add_argument("--auto", action="store_true", help="add: run the saved goal in autonomous mode")
+    ag.add_argument("--allow", action="append", metavar="SKILL",
+                    help="add: a skill of this goal that may run without asking (repeatable; deny rules still win)")
     ag.add_argument("--max-steps", type=int, default=10)
     ag.add_argument("--max-items", type=int, default=5, help="most items one 'each of them' step goes through")
     ag.add_argument("--max-minutes", type=float, default=5)
@@ -1096,6 +1127,18 @@ def build_parser() -> argparse.ArgumentParser:
     ag.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
     _add_skill_flags(ag)
     ag.set_defaults(func=cmd_agent)
+
+    ev = sub.add_parser("eval", help="benchmarks: planner tool choice, model loss and behaviour, history")
+    ev.add_argument("action", choices=["plan", "model", "history"])
+    ev.add_argument("model", nargs="?", help="model: the checkpoint to score")
+    ev.add_argument("--suite", help="a JSON Lines suite (default: the built-in one)")
+    ev.add_argument("--text", help="model: held-out text file for loss and perplexity")
+    ev.add_argument("--no-suite", action="store_true", help="model: only the held-out text")
+    ev.add_argument("--no-record", action="store_true", help="don't add this result to the history")
+    ev.add_argument("--json", action="store_true")
+    ev.add_argument("-n", type=int, default=30, help="history: how many")
+    _add_skill_flags(ev)
+    ev.set_defaults(func=cmd_eval)
 
     jb = sub.add_parser("jobs", help="durable goals: survive restarts, pause for approval, end with a checked result")
     jb.add_argument("action", choices=["start", "list", "show", "resume", "approve", "skip", "cancel"])

@@ -184,7 +184,7 @@ No scheduler available? `libra auto run libra-auto.json --loop --every 24` keeps
   "filters": {"min_chars": 300, "language": "en", "max_symbol_ratio": 0.25, "mask_personal_info": true},
   "limits": {"max_pages_per_run": 300, "max_dataset_mb": 500, "max_minutes": 120, "min_free_disk_mb": 2000,
              "delay_seconds": 1.0, "retries": 2, "retry_delay_seconds": 5},
-  "gate": {"holdout_fraction": 0.05, "max_regression": 0.02},
+  "gate": {"holdout_fraction": 0.05, "max_regression": 0.02, "eval_suite": "", "max_eval_drop": 0.0},
   "discover": true,
   "notify": {"url": "", "on": "changes"}
 }
@@ -209,7 +209,7 @@ Relative paths are relative to the config file. YAML configs (`.yaml`) work too.
    - It **masks e-mail addresses and phone numbers**.
    - The report counts every drop by reason.
 4. **Trains a copy** of the current model, or a new one on the first run, for `steps_per_run` steps within `max_minutes`. Your current model is never touched while this happens.
-5. **Gates the result.** One in 20 kept documents (`holdout_fraction`) goes to a held-out set that is never trained on. The old and new models are both scored on it, and the new one replaces the old only if it's no worse than `max_regression` allows (2% by default). Otherwise it's set aside in `checkpoints/auto.rejected`. The replaced model stays in `checkpoints/auto.previous` for `rollback`.
+5. **Gates the result.** One in 20 kept documents (`holdout_fraction`) goes to a held-out set that is never trained on. The old and new models are both scored on it, and the new one replaces the old only if it's no worse than `max_regression` allows (2% by default). Otherwise it's set aside in `checkpoints/auto.rejected`. The replaced model stays in `checkpoints/auto.previous` for `rollback`. Lower loss doesn't by itself mean better answers, so you can also set `"eval_suite": "builtin"` (or a path to your own suite, see *Benchmarks*). The new model must then also not score lower on behaviour than the old one, beyond `max_eval_drop`.
 6. **Reports** to `datasets/auto/.auto/last-report.md` (and appends to `runs.jsonl`). While it runs, it writes live progress (phase, pages, training step and loss), which the app's Training tab shows as a progress bar.
 
 ```
@@ -237,6 +237,22 @@ On the Debian service, a failed run (network down, disk full) is retried up to 3
 - **Glance at the report** now and then. The gate catches a model getting worse; it can't tell you whether the text was what you wanted.
 - **Expect gradual progress.** On a 4-core computer the default model trains at about 2,500 tokens/s, so each nightly run moves it a little. See *Minimum resources* for sizes and speeds.
 
+## Benchmarks: measure before changing things
+
+```bash
+libra eval plan                                   # does the planner pick the right skills? (28 labelled goals)
+libra eval model checkpoints/web                  # the model's behaviour on 40 multiple-choice items
+libra eval model checkpoints/web --text held.txt  # plus held-out loss and perplexity on text it never saw
+libra eval history                                # every result, so a regression shows up
+```
+
+Each run is recorded in `~/.libra/eval/history.jsonl` with the checkpoint version, and printed with the change since the last comparable run. The model is measured in three separate ways, because they don't move together:
+- **Held-out loss and perplexity**, on text it didn't train on.
+- **Behaviour, by likelihood.** For each item, which continuation the model finds most probable ("The cats" → " are sleeping." or " is sleeping."), scored per token so length doesn't decide. This works even for small models. The built-in suite covers agreement, tense, common phrases, simple facts, common sense and sequences, reported per tag and next to the chance level.
+- **Generation checks.** In your own suite, `{"prompt": "…", "expect": ["…"]}` requires the greedy reply to contain one of the expected strings.
+
+Suites are JSON Lines. See [`libra/evals/`](libra/evals) for the built-in ones and [`evaluate.py`](libra/evaluate.py) for the format. Two baselines to compare against: the planner scores 27/28 on its suite (it refuses "calculate 17% of 250"). A 130K-parameter model trained only on this README scores 0.425 on behaviour, against 0.39 for random guessing. A small model needs far more, and broader, text to do much better.
+
 ## Goal agent: plain-language goals, run with your skills
 
 ```bash
@@ -263,6 +279,15 @@ The app's **Agent** tab does the same: preview a plan, run it, save and schedule
 - Read-only skills run.
 - Skills that change something ask first in the terminal. Scheduled goals and goals started from the app run as **durable jobs** (below): a step that needs approval pauses the job until you approve it, from the app or with `libra jobs approve`.
 - Runs stop at `--max-steps` (10) and `--max-minutes` (5).
+
+**Per-goal permissions.** A saved goal may only ever use the skills its plan uses when you save it, so a later re-plan can't drift into other skills. `--allow SKILL` lets one of those skills run without asking, for this goal only. Deny rules still win.
+
+```bash
+libra agent add digest "list the links on https://example.com/blog then scrape each of them then summarize it" --every daily@07:00
+libra agent add notes "summarize \"…\" then remember it" --allow remember
+```
+
+**Outside content is data, not instructions.** Text from a web page (`scrape`, `crawl`, `links`), an MCP server or API, or a memory (which may hold earlier web results) can't drive a change without a person. If a step that changes something would use such text, it waits for your approval, even when the trust policy allows that skill. Read-only steps in between keep the mark, so summarizing a page doesn't launder it. Plugins can mark their own skills with `@skill(..., external=True)`. A change that doesn't use the outside text, for example `remember "buy milk"` after a scrape, isn't held up.
 
 Schedules: `hourly`, `daily`, `weekly`, `30m`, `6h`, `daily@07:00`, `weekdays@08:30` or `weekly@09:00`. The Debian service checks for due goals every 5 minutes. Elsewhere, run `libra agent run-due` from cron.
 

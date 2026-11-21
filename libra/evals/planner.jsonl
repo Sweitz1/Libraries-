@@ -1,0 +1,30 @@
+// Tool-choice benchmark for the goal planner (built-in skills only). One goal per line:
+// "skills" is the correct plan; "refuse": true means the goal should not be planned.
+{"goal": "what is (2+3)*4", "skills": ["calc"]}
+{"goal": "calculate 17% of 250", "skills": ["calc"]}
+{"goal": "what time is it", "skills": ["time"]}
+{"goal": "scrape https://example.com/news", "skills": ["scrape"]}
+{"goal": "scrape https://example.com/news then summarize it in 3 sentences", "skills": ["scrape", "summarize"]}
+{"goal": "scrape https://example.com/news then summarize it then translate it to Spanish", "skills": ["scrape", "summarize", "translate"]}
+{"goal": "list the links on https://example.com/blog then scrape each of them then summarize it", "skills": ["links", "scrape", "summarize"]}
+{"goal": "crawl https://example.com/docs", "skills": ["crawl"]}
+{"goal": "crawl https://example.com/docs and then summarize it in 5 sentences", "skills": ["crawl", "summarize"]}
+{"goal": "translate \"good morning\" to French", "skills": ["translate"]}
+{"goal": "translate \"where is the station?\" into German", "skills": ["translate"]}
+{"goal": "detect the language of \"bonjour tout le monde\"", "skills": ["detect_language"]}
+{"goal": "what language is \"buenos días\"", "skills": ["detect_language"]}
+{"goal": "summarize \"One. Two. Three. Four.\" in 2 sentences", "skills": ["summarize"]}
+{"goal": "summarize \"Cats sleep a lot. They also purr.\" then translate it to Spanish", "skills": ["summarize", "translate"]}
+{"goal": "remember that the backup runs at 3am", "skills": ["remember"]}
+{"goal": "what do you remember about the backup", "skills": ["recall"]}
+{"goal": "forget the backup note", "skills": ["forget"]}
+{"goal": "romanize \"Привет\"", "skills": ["romanize"]}
+{"goal": "scrape https://a.example and https://b.example then summarize it", "skills": ["scrape", "summarize"]}
+{"goal": "what is 6*7; then translate it to Spanish", "skills": ["calc", "translate"]}
+{"goal": "scrape https://example.com/news, after that summarize it", "skills": ["scrape", "summarize"]}
+{"goal": "frobnicate the quantum flux capacitor", "refuse": true}
+{"goal": "book me a flight to Lisbon", "refuse": true}
+{"goal": "summarize it", "refuse": true}
+{"goal": "translate it to Spanish", "refuse": true}
+{"goal": "delete all my emails", "refuse": true}
+{"goal": "", "refuse": true}

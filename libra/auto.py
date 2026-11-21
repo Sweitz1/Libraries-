@@ -54,7 +54,7 @@ TEMPLATE = {
                 "max_repeated_line_ratio": 0.3, "mask_personal_info": True},
     "limits": {"max_pages_per_run": 300, "max_dataset_mb": 500, "max_minutes": 120, "min_free_disk_mb": 2000,
                "delay_seconds": 1.0, "retries": 2, "retry_delay_seconds": 5},
-    "gate": {"holdout_fraction": 0.05, "max_regression": 0.02},
+    "gate": {"holdout_fraction": 0.05, "max_regression": 0.02, "eval_suite": "", "max_eval_drop": 0.0},
     "discover": True,
     "notify": {"url": "", "on": "changes"},
     "allow_private": False,
@@ -230,6 +230,8 @@ class Report:
     steps: int = 0
     old_loss: float | None = None
     new_loss: float | None = None
+    old_eval: float | None = None
+    new_eval: float | None = None
     decision: str = "no training"
     sample: str = ""
     seconds: float = 0.0
@@ -247,8 +249,11 @@ class Report:
                  f"- dataset size: {self.dataset_mb:.1f} MB"]
         if self.trained:
             old = "none (first model)" if self.old_loss is None else f"{self.old_loss:.4f}"
-            lines += [f"- training: {self.steps} steps; held-out loss: old {old} → new {self.new_loss:.4f}",
-                      f"- **decision: {self.decision}**"]
+            lines += [f"- training: {self.steps} steps; held-out loss: old {old} → new {self.new_loss:.4f}"]
+            if self.new_eval is not None:
+                was = "none" if self.old_eval is None else f"{self.old_eval:.3f}"
+                lines.append(f"- behaviour (eval suite accuracy): old {was} → new {self.new_eval:.3f}")
+            lines.append(f"- **decision: {self.decision}**")
         else:
             lines.append(f"- **{self.decision}**")
         if self.sample:
@@ -744,7 +749,20 @@ def _train_and_gate(cfg, train_dir, holdout, model_dir, report: Report, t0: floa
     report.new_loss = holdout_loss(candidate, holdout)
     report.old_loss = holdout_loss(model_dir, holdout) if exists else None
     allowed = None if report.old_loss is None else report.old_loss * (1 + cfg["gate"]["max_regression"])
-    if allowed is None or report.new_loss <= allowed:
+    behaviour_ok, why = True, ""
+    suite = _eval_suite(cfg)
+    if suite and (allowed is None or report.new_loss <= allowed):
+        # lower loss alone doesn't mean better answers: the behaviour score must not drop either
+        from .evaluate import evaluate_model
+
+        report.new_eval = evaluate_model(candidate, suite=suite)["choice_accuracy"]
+        report.old_eval = evaluate_model(model_dir, suite=suite)["choice_accuracy"] if exists else None
+        drop = float(cfg["gate"].get("max_eval_drop", 0.0))
+        if report.old_eval is not None and report.new_eval is not None and report.new_eval < report.old_eval - drop:
+            behaviour_ok = False
+            why = (f"its behaviour score dropped ({report.new_eval:.3f} < {report.old_eval:.3f} on "
+                   f"{os.path.basename(suite)})")
+    if (allowed is None or report.new_loss <= allowed) and behaviour_ok:
         previous = model_dir.rstrip("/") + ".previous"
         shutil.rmtree(previous, ignore_errors=True)
         if exists:
@@ -755,8 +773,22 @@ def _train_and_gate(cfg, train_dir, holdout, model_dir, report: Report, t0: floa
         rejected = model_dir.rstrip("/") + ".rejected"
         shutil.rmtree(rejected, ignore_errors=True)
         os.replace(candidate, rejected)
-        report.decision = (f"kept the old model: the new one scored worse on held-out text "
-                           f"({report.new_loss:.4f} > {allowed:.4f}); it is saved in {rejected}")
+        reason = why or f"it scored worse on held-out text ({report.new_loss:.4f} > {allowed:.4f})"
+        report.decision = f"kept the old model: {reason}; the new one is saved in {rejected}"
+
+
+def _eval_suite(cfg) -> str:
+    """The behaviour suite the gate uses: "" (none), "builtin", or a path to a JSON Lines suite."""
+    value = str(cfg["gate"].get("eval_suite") or "").strip()
+    if not value:
+        return ""
+    if value == "builtin":
+        from .evaluate import DEFAULT_MODEL_SUITE
+
+        return DEFAULT_MODEL_SUITE
+    if not os.path.exists(value):
+        raise ValueError(f"gate.eval_suite: no such file {value!r}")
+    return value
 
 
 def _sample(model_dir: str) -> str:

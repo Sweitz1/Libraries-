@@ -1,0 +1,42 @@
+// Behaviour benchmark for small English models: which continuation does the model find most likely?
+// "answer" is the index of the right choice. Chance level is about 0.39 (2 or 3 choices each).
+{"prompt": "The cats", "choices": [" are sleeping.", " is sleeping."], "answer": 0, "tag": "agreement"}
+{"prompt": "The dog", "choices": [" are barking.", " is barking."], "answer": 1, "tag": "agreement"}
+{"prompt": "My friends", "choices": [" was late.", " were late."], "answer": 1, "tag": "agreement"}
+{"prompt": "She", "choices": [" go to school every day.", " goes to school every day."], "answer": 1, "tag": "agreement"}
+{"prompt": "They", "choices": [" has finished.", " have finished."], "answer": 1, "tag": "agreement"}
+{"prompt": "The book on the shelves", "choices": [" is old.", " are old."], "answer": 0, "tag": "agreement"}
+{"prompt": "I", "choices": [" am happy.", " is happy.", " are happy."], "answer": 0, "tag": "agreement"}
+{"prompt": "There", "choices": [" is many people here.", " are many people here."], "answer": 1, "tag": "agreement"}
+{"prompt": "Yesterday we", "choices": [" go to the park.", " went to the park."], "answer": 1, "tag": "tense"}
+{"prompt": "Tomorrow I", "choices": [" will call you.", " called you."], "answer": 0, "tag": "tense"}
+{"prompt": "He has", "choices": [" eaten already.", " eat already."], "answer": 0, "tag": "tense"}
+{"prompt": "Last year she", "choices": [" visits Paris.", " visited Paris."], "answer": 1, "tag": "tense"}
+{"prompt": "I would like", "choices": [" a cup of tea.", " a cup tea of.", " tea a of cup."], "answer": 0, "tag": "word order"}
+{"prompt": "Thank you very", "choices": [" much.", " many.", " lot."], "answer": 0, "tag": "phrase"}
+{"prompt": "Once upon a", "choices": [" time", " table", " river"], "answer": 0, "tag": "phrase"}
+{"prompt": "Ladies and", "choices": [" gentlemen", " tables", " yesterday"], "answer": 0, "tag": "phrase"}
+{"prompt": "On the other", "choices": [" hand", " foot", " door"], "answer": 0, "tag": "phrase"}
+{"prompt": "As soon as", "choices": [" possible", " tomorrow", " never"], "answer": 0, "tag": "phrase"}
+{"prompt": "In the middle of the", "choices": [" night", " quickly", " of"], "answer": 0, "tag": "phrase"}
+{"prompt": "Happy birthday to", "choices": [" you", " them were", " is"], "answer": 0, "tag": "phrase"}
+{"prompt": "The sun rises in the", "choices": [" east", " west"], "answer": 0, "tag": "fact"}
+{"prompt": "Water freezes at zero degrees", "choices": [" Celsius", " Fahrenheit"], "answer": 0, "tag": "fact"}
+{"prompt": "There are seven days in a", "choices": [" week", " year", " minute"], "answer": 0, "tag": "fact"}
+{"prompt": "There are twelve months in a", "choices": [" year", " day", " week"], "answer": 0, "tag": "fact"}
+{"prompt": "Cows give us", "choices": [" milk", " glass", " electricity"], "answer": 0, "tag": "fact"}
+{"prompt": "Fish live in", "choices": [" water", " trees", " clouds"], "answer": 0, "tag": "fact"}
+{"prompt": "Paris is the capital of", "choices": [" France", " Japan", " Brazil"], "answer": 0, "tag": "fact"}
+{"prompt": "Snow is", "choices": [" cold", " hot"], "answer": 0, "tag": "fact"}
+{"prompt": "You use an umbrella when it", "choices": [" rains", " sleeps", " reads"], "answer": 0, "tag": "commonsense"}
+{"prompt": "When you are hungry, you", "choices": [" eat", " sleep", " sing"], "answer": 0, "tag": "commonsense"}
+{"prompt": "At night the sky is", "choices": [" dark", " loud", " hungry"], "answer": 0, "tag": "commonsense"}
+{"prompt": "To open a locked door you need a", "choices": [" key", " spoon", " song"], "answer": 0, "tag": "commonsense"}
+{"prompt": "Ice cream melts because it is", "choices": [" warm outside", " very heavy", " made of glass"], "answer": 0, "tag": "commonsense"}
+{"prompt": "If you drop a glass, it may", "choices": [" break", " sing", " grow"], "answer": 0, "tag": "commonsense"}
+{"prompt": "One, two, three,", "choices": [" four", " seven", " ten"], "answer": 0, "tag": "sequence"}
+{"prompt": "Monday, Tuesday,", "choices": [" Wednesday", " Friday", " Sunday"], "answer": 0, "tag": "sequence"}
+{"prompt": "January, February,", "choices": [" March", " June", " October"], "answer": 0, "tag": "sequence"}
+{"prompt": "A, B, C,", "choices": [" D", " Q", " Z"], "answer": 0, "tag": "sequence"}
+{"prompt": "The opposite of hot is", "choices": [" cold", " big", " fast"], "answer": 0, "tag": "meaning"}
+{"prompt": "The opposite of up is", "choices": [" down", " left", " under the"], "answer": 0, "tag": "meaning"}

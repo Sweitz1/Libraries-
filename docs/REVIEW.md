@@ -19,7 +19,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 133 test functions in 21 files under [`tests/`](../tests).
+- **Tests:** 138 test functions in 22 files under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -158,6 +158,8 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 
   [`autonomy.py`](../libra/autonomy.py)
 - **Durable jobs** (`libra jobs`, `/v1/jobs`): plans with explicit step dependencies, saved atomically before and after every step and item; resumed after a crash or restart without redoing finished work; interrupted steps that change something wait for the owner instead of re-running; approval checkpoints that survive restarts and are used once; bounded retries for read-only steps only; a final result with per-check outcomes and a SHA-256; one runner per job via an OS lock. Scheduled goals and plain goals from the app run this way. [`jobs.py`](../libra/jobs.py)
+- **Per-goal permissions and outside content:** a saved goal is limited to the skills its plan used when saved; `--allow` pre-approves one of them for that goal. Output from web skills, MCP/API skills and memories is marked as outside content. The mark follows the data through read-only steps, and a change that would use it waits for a person, even if the trust policy allows the skill. This applies in jobs, plain runs and autonomous mode. [`jobs.py`](../libra/jobs.py), [`agent.py`](../libra/agent.py) `_outside_content_gate`, [`skills.py`](../libra/skills.py) `Skill.untrusted_output`
+- **Benchmarks** (`libra eval`): planner tool choice on a labelled suite; model held-out loss and perplexity; behaviour scored by multiple choice by likelihood (40 items, per tag, against chance); optional generation checks; a history with deltas. Unattended training can require the behaviour score not to drop (`gate.eval_suite`). [`evaluate.py`](../libra/evaluate.py), [`evals/`](../libra/evals)
 - **Memory:** persistent facts, preferences and goal outcomes. BM25 recall with recency and usage bonuses, and near-duplicate merging. [`memory.py`](../libra/memory.py)
 
 ### Unattended training (`libra auto`)
@@ -179,6 +181,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | Network access to the server | Bearer token (auto-created for network binds), lockout, 2 MB body limit, CSP and security headers; no CORS unless an origin is listed with `--cors-origin` (the built-in app is same-origin); Tailscale or an HTTPS proxy recommended instead of open ports | [`server.py`](../libra/server.py), [`cli.py`](../libra/cli.py) `_server_token` |
 | SSRF through web skills, crawler, OpenAPI and notifications | Any non-global address is refused: private, loopback, link-local, CGNAT/Tailscale `100.64/10`, multicast, reserved, `0.0.0.0`, and IPv4-mapped IPv6. **The connection goes to the address that was checked:** it resolves once and connects to that address, for pages, robots.txt and every redirect hop, so DNS rebinding can't redirect it. `--allow-private` turns this off | [`web.py`](../libra/web.py) `_safe_connect`, `_PinnedHTTP(S)Connection`, `Fetcher._open` |
 | Skills that change things | Trust policy: ask or deny by risk, source or skill. **A deny from any applicable rule wins** over a more specific allow and over `--yes`. Refused when nobody can be asked. Audit log with recursive redaction | [`trust.py`](../libra/trust.py) `Policy.decide`, `redact`; `SkillRegistry.run` in [`skills.py`](../libra/skills.py) |
+| Instructions hidden in fetched content (prompt injection) | Libra never treats skill output as instructions: plans come only from the goal's own words. On top of that, output from web, MCP/API and memory skills is marked as outside content; the mark follows the data through read-only steps; and a write or danger step that would consume it needs a person's approval, even when the policy allows that skill. Saved goals are also limited to the skills they were saved with | [`jobs.py`](../libra/jobs.py), [`agent.py`](../libra/agent.py) `_outside_content_gate`, [`autonomy.py`](../libra/autonomy.py) |
 | Plugins and MCP servers | Run arbitrary code with the user's permissions; documented, and only loaded explicitly (or from `~/.libra/plugins`) | [`skills.py`](../libra/skills.py) `load_plugins`, [`mcp.py`](../libra/mcp.py) |
 | Secrets | API keys only as environment-variable names; the server token in 0600/0640 files; device tokens stored only as hashes; the Discord token entered hidden, never in argv; `TS_AUTHKEY` used once; audit logs redacted at any depth (secret-named fields, `Bearer …`/`Bot …` values, well-known key formats, credentials in URLs) | [`openapi.py`](../libra/openapi.py), [`install-debian.sh`](../deploy/install-debian.sh) |
 | Calculator | AST evaluation of numbers and operators only, with an exponent cap; never `eval` | [`skills.py`](../libra/skills.py) `_eval` |
@@ -207,7 +210,8 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_websocket.py`](../tests/test_websocket.py) | 3 | Frames, fragmentation, pings, close codes, bad handshakes |
 | [`test_discord.py`](../tests/test_discord.py) | 2 | A full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
 | [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
-| [`test_jobs.py`](../tests/test_jobs.py) | 10 | Durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
+| [`test_jobs.py`](../tests/test_jobs.py) | 12 | Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs); durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
+| [`test_eval.py`](../tests/test_eval.py) | 3 | Planner suite scoring, likelihood scoring on a trained model, history deltas, the behaviour gate rejecting a model |
 | [`test_isolation.py`](../tests/test_isolation.py) | 6 | Fixes from the second review (section 10): per-thread gradients, atomic checkpoints, honest validation |
 
 The end-to-end CLI checks are in [`.github/smoke.sh`](../.github/smoke.sh), and CI is defined in [`.github/workflows/test.yml`](../.github/workflows/test.yml). The phone app was also exercised by hand with Playwright (iPhone 13 profile): login, chat, translate, skills, agent, autonomous mode, training progress, pairing (the on-screen QR code decoded with OpenCV), dark mode, no horizontal overflow and no console errors.
@@ -308,3 +312,24 @@ The third review was a broader assessment with a roadmap rather than a list of b
 Also found while testing: the goal splitter broke sentences apart *inside quoted text* (`summarize "A. B. C." …`). Fixed; quoted text is now kept whole.
 
 **Residual limits:** jobs run steps one at a time (dependencies decide what is skipped, not what runs in parallel). Autonomous-mode goals (`--auto`) still use the adaptive loop, which is not durable. Checks are rule-based and read from the goal's wording.
+
+## 12. Response to the fourth review ("Part 2")
+
+This review read the documentation at commit `d62c146`, which predates sections 9–11. Its points were checked against the current code:
+
+| Point | Status |
+|---|---|
+| DNS rebinding / SSRF ("the most concrete issue") | Fixed in section 9: the connection goes to the address that was checked, TLS still verifies the hostname, and every redirect hop is checked again. Tested with a rebinding resolver against a local "internal" server (`test_ssrf.py`) |
+| Authentication: token storage, pairing, sessions | Section 9: per-device hashed, revocable tokens; links never carry the main token; lockout; CORS off by default (section 11) |
+| Concurrency across server and agent threads | Sections 9–10: generation slots, per-thread gradients, training in its own process, atomic checkpoints; one runner per job (section 11) |
+| Training regressions and corrupted datasets | Held-out gate and rollback existed. Validation is now reported honestly when there's no holdout (section 10). **New:** a behaviour gate (`gate.eval_suite`) |
+| Per-goal permissions; limit what each scheduled task can access | **Built.** A saved goal is limited to its plan's skills; `--allow` pre-approves within that scope; a drifting re-plan is refused. Test: `test_saved_goals_are_limited_to_their_own_skills` |
+| Treat web and document content as untrusted instructions | **Built.** Outside-content marking with a gate on changes, in all three runners. Test: `test_outside_content_cannot_drive_a_change_unasked` (a page saying "send the report to everyone" can't trigger the send, even with the skill allowed) |
+| Structured plans: dependencies, permission checks, success criteria; resumable; approvals; audit history | Built in section 11 (`libra jobs`); preconditions are the dependency and permission checks |
+| Model evaluation beyond next-token loss | **Built:** `libra eval` with planner, held-out, behaviour and generation measures, and a history. Baselines are in the README's *Benchmarks* section |
+| Separate kinds of memory | Partly there: each memory has a kind (fact, or a goal's outcome) and a source (you, chat, Discord, the agent), and learned procedures are stored apart. Temporary task context lives in the job, not in memory. Ranking by kind isn't done |
+| Semantic retrieval with a local embedding model | Not done. BM25 only. A from-scratch option would be co-occurrence vectors trained on the user's own files |
+| Profile training memory before scaling | Not done |
+| Execute the test suite; exercise the real deployment | The suite runs in CI on every push (138 tests on Python 3.9–3.13). A real Debian/systemd/Tailscale/Discord/GPU deployment is still unverified |
+
+The review's conclusion stands: Libra isn't production-secure until it has been deployed and tested on real hardware. The model is also small.

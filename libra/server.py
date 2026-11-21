@@ -407,8 +407,12 @@ def make_handler(engine: Engine):
                 if action == "plan":
                     self._json(200, agent.plan(str(body.get("goal", "")), engine.skills).to_dict())
                 elif action == "goals":
+                    allow = body.get("allow") or []
+                    if not isinstance(allow, list):
+                        raise ValueError("allow must be a list of skill names")
                     p = agent.add_goal(str(body.get("name", "")), str(body.get("goal", "")), body.get("every") or None,
-                                       engine.skills, autonomous=bool(body.get("autonomous")))
+                                       engine.skills, autonomous=bool(body.get("autonomous")),
+                                       allow=[str(a) for a in allow])
                     self._json(200, {"saved": True, "plan": p.to_dict()})
                 elif action == "remove":
                     self._json(200, {"removed": agent.remove_goal(str(body.get("name", "")))})
@@ -439,7 +443,7 @@ def make_handler(engine: Engine):
                     if not autonomous:  # plain goals run as durable jobs
                         from . import jobs
 
-                        job = jobs.create(goal, engine.skills, name=name)
+                        job = jobs.create(goal, engine.skills, name=name, permissions=agent.goal_permissions(name))
 
                     def work():
                         steps = []

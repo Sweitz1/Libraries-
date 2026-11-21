@@ -9,6 +9,6 @@ from .nn import GPT, GPTConfig
 from .skills import SkillRegistry, default_registry, skill
 from .tokenizer import BPETokenizer
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 __all__ = ["Tensor", "no_grad", "GPT", "GPTConfig", "BPETokenizer", "SamplingParams",
            "generate", "stream_text", "load", "save", "skill", "SkillRegistry", "default_registry", "__version__"]

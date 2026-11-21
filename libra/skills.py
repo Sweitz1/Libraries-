@@ -36,6 +36,10 @@ DEFAULT_PLUGIN_DIR = os.path.join(os.environ.get("LIBRA_HOME") or os.path.join(o
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 
 
+# built-in skills whose output is outside content: web pages, and memories (which hold earlier results)
+EXTERNAL_BUILTINS = frozenset({"scrape", "crawl", "links", "recall"})
+
+
 @dataclass
 class Skill:
     name: str
@@ -46,6 +50,16 @@ class Skill:
     source: str = "builtin"
     risk: str = "read"  # read, write or danger (see libra.trust)
     input_schema: dict | None = None  # JSON schema for catalog skills (MCP tools, API operations)
+    external: bool | None = None  # returns outside content (web pages, other services)? None: decide by kind
+
+    @property
+    def untrusted_output(self) -> bool:
+        """True if what this skill returns comes from outside (a web page, an MCP server, an API, or
+        stored text that may have come from those). Such text is data, never instructions: it can't
+        drive a change without a person approving it (see :mod:`libra.jobs`)."""
+        if self.external is not None:
+            return self.external
+        return self.name in EXTERNAL_BUILTINS or self.input_schema is not None
 
     def signature(self) -> inspect.Signature:
         return inspect.signature(self.func)
@@ -179,14 +193,16 @@ class SkillRegistry:
         return s
 
     def skill(self, name: str | None = None, description: str = "", params: dict | None = None, router=None,
-              risk: str = "write"):
+              risk: str = "write", external: bool | None = None):
         """Decorator registering a function as a skill in this registry.
 
-        ``risk`` is "read", "write" (the default, so you're asked before it runs) or "danger"."""
+        ``risk`` is "read", "write" (the default, so you're asked before it runs) or "danger".
+        ``external=True`` marks a skill whose output comes from outside (web, another service)."""
 
         def wrap(func):
             self.register(Skill(name or func.__name__, description or (func.__doc__ or "").strip(), func,
-                                params or {}, router, source=getattr(func, "__module__", "plugin"), risk=risk))
+                                params or {}, router, source=getattr(func, "__module__", "plugin"), risk=risk,
+                                external=external))
             return func
 
         return wrap
@@ -336,12 +352,13 @@ _target: SkillRegistry | None = None  # registry receiving @skill while a plugin
 
 
 def skill(name: str | None = None, description: str = "", params: dict | None = None, router=None,
-          risk: str = "write"):
-    """Register a skill from a plugin file. ``risk``: "read", "write" (default) or "danger"."""
+          risk: str = "write", external: bool | None = None):
+    """Register a skill from a plugin file. ``risk``: "read", "write" (default) or "danger".
+    ``external=True``: its output comes from outside (a web page, another service)."""
 
     def wrap(func):
         registry = _target or _default
-        return registry.skill(name, description, params, router, risk)(func)
+        return registry.skill(name, description, params, router, risk, external)(func)
 
     return wrap
 

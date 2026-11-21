@@ -25,6 +25,10 @@ libra memory add "the backup runs at 3am"
 libra memory search backup
 libra agent auto "what is (2+3)*4"
 libra agent procedures
+# benchmarks: planner tool choice, then the model trained above (loss and behaviour), then the history
+libra eval plan
+libra eval model "$work/ckpt"
+libra eval history
 # durable jobs: a checked result, a listing, the event log
 libra jobs start 'summarize "Jobs are saved after every step. They resume after a restart. Changes wait for approval. Results are checked." in 2 sentences'
 libra jobs list > "$work/jobs.txt"

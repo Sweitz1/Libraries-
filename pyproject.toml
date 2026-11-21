@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "libra-lm"
-version = "0.13.0"
+version = "0.14.0"
 description = "A GPT-style language model written from scratch on NumPy. No pretrained models, no API keys."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -17,7 +17,8 @@ gpu = ["cupy-cuda12x>=12"]
 libra = "libra.cli:main"
 
 [tool.setuptools]
-packages = ["libra", "libra.webui"]
+packages = ["libra", "libra.webui", "libra.evals"]
 
 [tool.setuptools.package-data]
 "libra.webui" = ["*.html", "*.js", "*.svg", "*.png", "*.webmanifest"]
+"libra.evals" = ["*.jsonl"]
