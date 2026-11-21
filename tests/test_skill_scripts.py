@@ -180,7 +180,7 @@ class VerificationLinkTest(unittest.TestCase):
         for section in ("## Attack surface", "## Known residual risks", "## Hypotheses worth testing",
                         "## Not verified at all", "## How to report", "## A prompt for an AI investigator"):
             self.assertIn(section, page)
-        self.assertEqual(len(re.findall(r"^\| H\d+ \|", page, re.M)), 10)
+        self.assertEqual(len(re.findall(r"^\| H\d+ \|", page, re.M)), 12)
         self.assertIn("/security/advisories/new", page)  # private reporting, not public issues
         for path in re.findall(rf"/blob/{sha}/([^)]+)\)", page):
             self.assertEqual(subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{sha}:{path}"]).returncode, 0, path)

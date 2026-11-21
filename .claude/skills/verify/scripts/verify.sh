@@ -72,6 +72,7 @@ else
     [ -z "$f" ] && continue
     case "$f" in
       libra/*|tests/*|pyproject.toml|.github/smoke.sh|plugins/*|data/*|examples/*) add python; add smoke ;;
+      scripts/*|.claude/skills/*) add python ;;  # tests/test_skill_scripts.py covers these
     esac
     case "$f" in clients/java/*) add java ;; esac
     case "$f" in android/*.java) add android ;; esac
