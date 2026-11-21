@@ -492,9 +492,14 @@ def extractive_summary(text: str, n: int = 3) -> str:
 
     from .knowledge import sentences, terms
 
-    sents = [s for s in sentences(re.sub(r"(?m)^#+\s*", "", text)) if len(s.split()) >= 5]
+    every = sentences(re.sub(r"(?m)^#+\s*", "", text))
+    sents = [s for s in every if len(s.split()) >= 5]  # very short fragments rarely carry the point...
+    if len(sents) < min(n, len(every)):
+        sents = every  # ...unless short sentences are all there is
+    if not sents:
+        return text.strip()[:500]
     if len(sents) <= n:
-        return " ".join(sents) or text.strip()[:500]
+        return " ".join(sents)
     freq = Counter(t for s in sents for t in set(terms(s)))
     top = max(freq.values())
     scored = []

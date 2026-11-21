@@ -33,7 +33,7 @@ The only dependency is **NumPy**. Everything else is in this repo.
 </tr>
 </table>
 
-**More:** [Templates](templates) to copy · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/Sweitz1/Libraries-/releases)
+**More:** [Java client](clients/java/README.md) · [Templates](templates) to copy · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/Sweitz1/Libraries-/releases)
 
 For a reviewer's map of every app, server, service and capability, with links to the code, see **[docs/REVIEW.md](docs/REVIEW.md)**.
 
@@ -60,6 +60,7 @@ For a reviewer's map of every app, server, service and capability, with links to
 | `libra/discord.py`, `libra/websocket.py`, `libra/notify.py` | Discord bot (gateway + REST), a from-scratch WebSocket client, notifications (ntfy, Discord webhooks, any URL) |
 | `libra/jobs.py`, `libra/evaluate.py` | Durable jobs (resumable goals with approvals and checked results); benchmarks for the planner and the model |
 | `android/` | The Android app: pairing, Keystore sign-in, notifications ([docs/MOBILE.md](docs/MOBILE.md)) |
+| `clients/java/` | A dependency-free Java client (pairing, chat, translate, skills, jobs), published to GitHub Packages ([README](clients/java/README.md)) |
 | `templates/`, `scripts/` | Templates to copy (plugin, benchmark suites, training config); the release script |
 | `libra/agent.py` | Goal agent: plans plain-language goals into skill steps, runs them under trust rules and limits, schedules |
 | `libra/qr.py`, `libra/pair.py` | QR codes (from scratch) and phone pairing: best address + token as a scannable link |

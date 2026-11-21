@@ -16,6 +16,12 @@ python -m unittest discover -s tests     # about 40 seconds
 ./.github/smoke.sh                       # end-to-end command-line checks
 ```
 
+Java client (needs JDK 11+ and Maven):
+
+```bash
+cd clients/java && mvn verify
+```
+
 Android (needs JDK 17 and the Android SDK; CI does this for you on every push):
 
 ```bash
@@ -36,6 +42,6 @@ Starting points: [`templates/`](templates) has a plugin, an evaluation suite and
 scripts/release.sh 0.16.0     # sets the version everywhere, runs the tests, builds, and prints the tag commands
 ```
 
-Pushing the tag `v0.16.0` runs the release workflow, which builds the Python packages and the Android APK, and publishes them with checksums as a GitHub release.
+Pushing the tag `v0.16.0` runs the release workflow, which builds the Python packages, the Android APK and the Java client, publishes them with checksums as a GitHub release, and deploys the Java client to GitHub Packages.
 
 Security problems: see [SECURITY.md](SECURITY.md).

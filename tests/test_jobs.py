@@ -126,6 +126,15 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(split_goal('summarize "One. Two. Three." in 2 sentences then translate it to Spanish'),
                          ['summarize "One. Two. Three." in 2 sentences', "translate it to Spanish"])
 
+    def test_summarize_never_returns_more_than_asked(self):
+        from libra.knowledge import sentences
+        from libra.skills import extractive_summary
+
+        self.assertEqual(len(sentences(extractive_summary("One. Two. Three.", 2))), 2)  # all short: was all 3
+        long = "Cats sleep for most of the day. " + "Dogs like to run in the park. " + "Birds sing early. "
+        self.assertEqual(len(sentences(extractive_summary(long, 1))), 1)
+        self.assertEqual(extractive_summary("no full stop here", 3), "no full stop here")
+
     def test_plan_has_explicit_dependencies(self):
         from libra import jobs
 

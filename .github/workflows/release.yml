@@ -1,7 +1,8 @@
 name: release
 
-# Pushing a tag like v0.16.0 builds everything and publishes a GitHub release with:
-#   the Python packages (wheel and source), libra.apk, and SHA256SUMS.
+# Pushing a tag like v0.16.0 builds everything and publishes:
+#   a GitHub release with the Python packages (wheel and source), libra.apk, the Java client jar
+#   and SHA256SUMS, and the Java client (ai.libra:libra-client) to GitHub Packages.
 on:
   push:
     tags: ['v*.*.*']
@@ -9,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   python:
@@ -78,8 +80,50 @@ jobs:
           name: android-apk
           path: out/
 
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      # server-id matches <distributionManagement> in clients/java/pom.xml; setup-java writes settings.xml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          server-id: github
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+      - run: pip install -e .
+      - name: Start a Libra server for the client's live test
+        run: |
+          export LIBRA_HOME="$RUNNER_TEMP/libra-home"
+          nohup libra serve --host 127.0.0.1 --port 8791 --token ci-test-token > "$RUNNER_TEMP/serve.log" 2>&1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:8791/health && break; sleep 1; done
+      - name: Build and test
+        working-directory: clients/java
+        env:
+          LIBRA_TEST_URL: http://127.0.0.1:8791
+          LIBRA_TEST_TOKEN: ci-test-token
+        run: mvn -B verify
+      - name: Publish to GitHub Packages
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: clients/java
+        env:
+          MAVEN_USERNAME: ${{ github.actor }}
+          MAVEN_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          LIBRA_TEST_URL: http://127.0.0.1:8791
+          LIBRA_TEST_TOKEN: ci-test-token
+        run: mvn -B deploy
+      - run: mkdir out && cp clients/java/target/libra-client-*.jar out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: java-client
+          path: out/
+
   publish:
-    needs: [python, android]
+    needs: [python, android, java]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

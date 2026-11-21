@@ -39,3 +39,31 @@ jobs:
       - run: pip install opencv-python-headless || echo "OpenCV unavailable, so the QR decode check is skipped"
       - run: python -m unittest discover -s tests -v
       - run: ./.github/smoke.sh
+
+  # The Java client (clients/java), tested against a real `libra serve`.
+  java-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - run: pip install -e .
+      - name: Start a Libra server
+        run: |
+          export LIBRA_HOME="$RUNNER_TEMP/libra-home"
+          nohup libra serve --host 127.0.0.1 --port 8791 --token ci-test-token > "$RUNNER_TEMP/serve.log" 2>&1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:8791/health && break; sleep 1; done
+      - name: Build and test (including against the server)
+        working-directory: clients/java
+        env:
+          LIBRA_TEST_URL: http://127.0.0.1:8791
+          LIBRA_TEST_TOKEN: ci-test-token
+        run: mvn -B verify
+      - if: failure()
+        run: cat "$RUNNER_TEMP/serve.log"
