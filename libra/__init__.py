@@ -6,8 +6,9 @@ from .autograd import Tensor, no_grad
 from .checkpoint import load, save
 from .generate import SamplingParams, generate, stream_text
 from .nn import GPT, GPTConfig
+from .skills import SkillRegistry, default_registry, skill
 from .tokenizer import BPETokenizer
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = ["Tensor", "no_grad", "GPT", "GPTConfig", "BPETokenizer", "SamplingParams",
-           "generate", "stream_text", "load", "save", "__version__"]
+           "generate", "stream_text", "load", "save", "skill", "SkillRegistry", "default_registry", "__version__"]

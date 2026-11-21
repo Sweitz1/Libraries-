@@ -22,3 +22,5 @@ jobs:
           libra train data --out ckpt --steps 40 --eval-every 20 --vocab 400 --ctx 32 --layers 1 --embd 32 --heads 2
           libra generate --model ckpt --prompt "The" --max-tokens 10
           libra data data --out ds && libra train ds --out ckpt2 --steps 5 --eval-every 5 --vocab 400 --ctx 32 --layers 1 --embd 32 --heads 2
+          libra skill list --plugins plugins
+          libra skill run calc "(2+3)*4"

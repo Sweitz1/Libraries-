@@ -1,7 +1,7 @@
 """OpenAI-compatible HTTP server (standard library only, no API key needed).
 
 Endpoints: GET /health, GET /v1/models, POST /v1/chat/completions,
-POST /v1/completions. Streaming uses server-sent events like the OpenAI API,
+POST /v1/completions, GET /v1/skills, POST /v1/skills/<name>. Streaming uses server-sent events like the OpenAI API,
 so any OpenAI-compatible client (including Nexus Agent) can connect.
 """
 from __future__ import annotations
@@ -17,11 +17,20 @@ from .generate import SamplingParams, stream_text
 
 
 class Engine:
-    def __init__(self, model, tokenizer, name: str = "libra"):
+    def __init__(self, model, tokenizer, name: str = "libra", skills=None, auto_skills: bool = False):
         self.model = model
         self.tokenizer = tokenizer
         self.name = name
+        self.skills = skills
+        self.auto_skills = auto_skills
         self.lock = threading.Lock()
+
+    def route(self, messages: list[dict]):
+        """Run a skill if auto-skills is on and the last user message asks for one."""
+        if not (self.auto_skills and self.skills and messages and messages[-1].get("role") == "user"):
+            return None
+        call = self.skills.route(chat._content(messages[-1]))
+        return self.skills.run(*call) if call else None
 
     def run(self, prompt: str, params: SamplingParams, stop_strings: list[str], stop_tokens):
         """Yield ``("text", piece)`` items, then ``("done", finish_reason, usage)``."""
@@ -108,6 +117,12 @@ def make_handler(engine: Engine):
             path = self.path.split("?")[0].rstrip("/")
             if path in ("", "/health"):
                 self._json(200, {"status": "ok", "model": engine.name})
+            elif path == "/v1/skills":
+                if engine.skills is None:
+                    self._json(200, {"object": "list", "data": []})
+                else:
+                    self._json(200, {"object": "list", "data": [
+                        dict(s.schema(), source=s.source) for s in engine.skills.list()]})
             elif path == "/v1/models":
                 self._json(200, {"object": "list", "data": [
                     {"id": engine.name, "object": "model", "created": 0, "owned_by": "local"}]})
@@ -126,10 +141,27 @@ def make_handler(engine: Engine):
                 self._error(400, f"bad request: {exc}")
                 return
 
-            if path == "/v1/chat/completions":
+            if path.startswith("/v1/skills/"):
+                name = path[len("/v1/skills/"):]
+                if engine.skills is None or name not in engine.skills:
+                    self._error(404, f"unknown skill {name!r}")
+                    return
+                args = body.get("arguments", body)
+                if isinstance(args, str):  # OpenAI tool-call style: arguments as a JSON string
+                    try:
+                        args = json.loads(args or "{}")
+                    except json.JSONDecodeError:
+                        self._error(400, "arguments must be JSON")
+                        return
+                self._json(200, engine.skills.run(name, args).to_dict())
+            elif path == "/v1/chat/completions":
                 messages = body.get("messages")
                 if not isinstance(messages, list) or not messages:
                     self._error(400, "'messages' must be a non-empty list")
+                    return
+                result = engine.route(messages)
+                if result is not None:
+                    self._respond_text(body, result.text, result.skill)
                     return
                 prompt = chat.render(messages, add_generation_prompt=True)
                 self._respond(body, params, prompt, chat_mode=True)
@@ -140,6 +172,28 @@ def make_handler(engine: Engine):
                 self._respond(body, params, str(prompt), chat_mode=False)
             else:
                 self._error(404, f"unknown path {self.path}")
+
+        def _respond_text(self, body, text: str, skill_name: str):
+            """Reply with a skill's output in the normal chat-completion format."""
+            cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+            base = {"id": cid, "created": int(time.time()), "model": engine.name, "libra_skill": skill_name}
+            if not body.get("stream"):
+                self._json(200, dict(base, object="chat.completion", choices=[
+                    {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+                    usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}))
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Connection", "close")
+            self._cors()
+            self.end_headers()
+            self.close_connection = True
+            for delta, finish in (({"role": "assistant", "content": text}, None), ({}, "stop")):
+                chunk = dict(base, object="chat.completion.chunk",
+                             choices=[{"index": 0, "delta": delta, "finish_reason": finish}])
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
 
         def _respond(self, body, params, prompt, chat_mode: bool):
             cid = ("chatcmpl-" if chat_mode else "cmpl-") + uuid.uuid4().hex[:24]

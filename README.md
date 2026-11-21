@@ -15,7 +15,9 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/generate.py` | Fast sampling with a key/value cache: temperature, top-k, top-p, repetition penalty, streaming UTF-8 decode |
 | `libra/dataset.py` | Dataset builder: files, chat exports, web pages and Project Gutenberg books into clean, de-duplicated training data |
 | `libra/server.py` | OpenAI-compatible HTTP API (standard library only), with streaming |
-| `libra/cli.py` | `libra data / train / generate / chat / serve / info` |
+| `libra/web.py` | Web fetcher (robots.txt, rate limits, private-address guard), HTML parser, CSS selector engine, scraper and crawler |
+| `libra/skills.py` | Skills (tools), plugin loader, message routing, built-in skills |
+| `libra/cli.py` | `libra data / train / generate / chat / serve / skill / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -105,6 +107,75 @@ A rule of thumb: you want at least about 20 training tokens per parameter. Keep 
 
 `--vocab` tokenizer size · `--ctx` context length · `--layers` `--heads` `--embd` model size · `--batch` batch size · `--steps` training steps · `--lr` peak learning rate · `--dropout` · `--eval-every` · `--resume` · `--sample-prompt` text used for the preview printed at each evaluation.
 
+## Skills and plugins
+
+Skills are tools Libra can run: reading web pages, crawling sites, arithmetic, the time, plus anything you add with plugins. They work in four places:
+
+| Where | Example |
+|---|---|
+| Chat command | `/scrape https://example.com select="h2"` or `/crawl https://example.com 5 depth=1` |
+| Plain chat | `scrape https://example.com`, `crawl https://example.com`, `links on https://…`, `what is 12*7`, `what time is it` |
+| Command line | `libra skill list`, `libra skill run calc "(2+3)*4"` |
+| HTTP | `GET /v1/skills` (OpenAI tool schemas), `POST /v1/skills/scrape {"url": "…"}` |
+
+When a skill runs, its output is the reply. A small model trained from scratch can't be trusted to restate web pages accurately, so it doesn't try. Turn off the plain-chat triggers with `libra chat --no-auto-skills`. On the server they're off by default; switch them on with `libra serve --auto-skills`.
+
+Built-in skills:
+
+| Skill | What it does |
+|---|---|
+| `scrape` | Page title, description, readable text (menus and scripts removed), tables, or elements matching a CSS selector. `format=markdown\|text\|json` |
+| `crawl` | Same-site crawl that obeys robots.txt and waits between requests; optional `out=pages.jsonl` |
+| `links` | Links on a page, optionally filtered |
+| `calc` | Exact arithmetic. It parses the expression and never executes code |
+| `time` | Local date and time |
+
+### Writing a plugin
+
+A plugin is a `.py` file. Each `@skill` function becomes a tool, and its parameters and type hints become the skill's arguments:
+
+```python
+# my_plugins/greet.py
+from libra.skills import skill
+
+@skill("greet", "Say hello to someone", params={"name": "who to greet"},
+       router=lambda msg: {"name": msg[6:]} if msg.lower().startswith("greet ") else None)
+def greet(name: str, times: int = 1) -> str:
+    return " ".join([f"Hello, {name}!"] * times)
+```
+
+```bash
+libra chat --plugins my_plugins/          # /greet Ana times=2   or just: greet Ana
+libra serve --plugins my_plugins/ --auto-skills
+```
+
+Plugins in `~/.libra/plugins/` load automatically. Return a string, or a dict or list (shown as JSON). To fetch web pages, use `libra.skills.fetcher()` so `--allow-private` applies. See `plugins/example_tools.py`. **Plugins run with your permissions, so only load code you trust.**
+
+## Web scraper and crawler
+
+These also work as standalone commands:
+
+```bash
+libra scrape https://example.com                       # Markdown: title, text, tables
+libra scrape https://example.com --select "h2" --select "a.button"
+libra scrape https://example.com --format json         # everything: links, images, meta, JSON-LD, headings
+
+libra crawl https://example.com --max-pages 50 --depth 2 --out pages.jsonl
+libra data pages.jsonl --out datasets/site             # turn a crawl into training data
+libra data --crawl https://example.com --crawl-pages 100 --out datasets/site   # or do both at once
+```
+
+CSS selectors support tags, `#id`, `.class`, `[attr]`, `[attr=v]`, `[attr^=v]`, `[attr$=v]`, `[attr*=v]`, `[attr~=v]`, `:first-child`, `:last-child`, `:nth-child(n)`, descendant and `>` child combinators, and comma lists.
+
+The crawler and scraper are polite and safe by default:
+
+- They obey robots.txt, including `Crawl-delay`, and wait `--delay` seconds (default 1) between requests to a site.
+- They stay on the starting site unless you pass `--any-site`, and skip images, archives and media.
+- Pages with identical content are fetched but not saved twice. Downloads are capped at 10 MB.
+- They refuse local and LAN addresses (including after redirects) unless you pass `--allow-private`. That stops a served Libra from being used to probe your network.
+
+`--ignore-robots` exists for sites you own. Respect each website's terms, and only use text you have the right to use.
+
 ## GPU (optional)
 
 Training and generation run on an NVIDIA GPU through CuPy, which is an array library, not a model. Install the CuPy build for your CUDA version, then pass `--device gpu`:
@@ -132,6 +203,8 @@ libra serve --model checkpoints/mine --host 0.0.0.0 --port 8000
 | `GET /v1/models` | lists the model |
 | `POST /v1/chat/completions` | OpenAI chat format, `stream: true` supported |
 | `POST /v1/completions` | plain text completion |
+| `GET /v1/skills` | skills as OpenAI tool schemas |
+| `POST /v1/skills/<name>` | run a skill: `{"url": "…"}` or `{"arguments": "{…}"}` |
 | `GET /health` | status check |
 
 Supported request fields: `messages` / `prompt`, `max_tokens`, `temperature`, `top_p`, `top_k`, `repetition_penalty`, `stop`, `seed`, `stream`. Any API key value is accepted, because none is needed.
@@ -150,7 +223,7 @@ Nexus Agent can talk to any OpenAI-compatible endpoint. Start `libra serve --hos
 - **Model:** `libra`
 - **API key:** leave empty, or type anything
 
-Only use `--host 0.0.0.0` on a network you trust. The server has no authentication.
+Only use `--host 0.0.0.0` on a network you trust. The server has no authentication, and anyone who can reach it can run its skills, including the web fetchers. Those still refuse LAN addresses unless you started it with `--allow-private`.
 
 ## Use it as a library
 
