@@ -1,0 +1,17 @@
+Libra is a small language model. It was written from scratch, one line at a time, and it learns only from the text you give it.
+
+A language model reads a sequence of tokens and guesses the next one. When it guesses well, the loss goes down. When it guesses badly, the gradient tells every weight which way to move. After many small steps the model starts to sound like the text it was trained on.
+
+The tokenizer splits text into pieces. It begins with single bytes and then joins the pairs that appear most often. Common words become one token. Rare words are spelled out from smaller parts. Nothing is ever unknown, because every string is made of bytes.
+
+Attention lets each token look back at the tokens before it. A token can ask a question, every earlier token offers an answer, and the model mixes those answers by how well they match. Many heads ask many questions at once.
+
+The library was quiet in the evening. Lamps glowed over the long tables, and the shelves rose into the dark like the walls of a canyon. Mira walked between them with a cart of returned books, reading the spines as she went. Every book had a place, and every place was waiting.
+
+She found a thin notebook wedged behind an atlas. Its pages were full of small, careful handwriting: lists of words, then pairs of words, then whole sentences built from the pairs. On the last page someone had written, "If you read enough, you begin to guess what comes next."
+
+Mira smiled. She put the notebook on the returns desk, turned off the lamps one by one, and walked out into the cool night air.
+
+Training is patient work. Start small. Watch the validation loss. If it stops falling while the training loss keeps dropping, the model is memorising instead of learning, so give it more text or make it smaller. If both losses are high, train longer or make it bigger.
+
+A model this size will not know facts about the world unless you teach them. It will learn the style, the rhythm and the common phrases of its data. Feed it recipes and it will write recipes. Feed it poems and it will write poems. Feed it conversations and it will learn to answer.

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f6f5c">
+<meta name="referrer" content="no-referrer">
+<title>Libra</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #f6f7f5; --surface: #ffffff; --surface-2: #eef1ee; --text: #17201c; --muted: #5d6a64;
+    --line: #d9dfdb; --accent: #1f6f5c; --accent-text: #ffffff; --accent-soft: #e1f0eb;
+    --warn: #8a5a00; --warn-soft: #fbf0d9; --danger: #a12f2f; --danger-soft: #f9e3e3;
+    --radius: 14px; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101513; --surface: #171e1b; --surface-2: #1f2824; --text: #e6ece9; --muted: #9aa8a1;
+      --line: #2c3833; --accent: #4fb89b; --accent-text: #08130f; --accent-soft: #1b3a31;
+      --warn: #e7b65c; --warn-soft: #3a2f17; --danger: #ef8a8a; --danger-soft: #3d1f1f;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+    display: flex; flex-direction: column; min-height: 100dvh;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    background: var(--surface); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--accent); } .dot.bad { background: var(--danger); }
+  main { flex: 1; overflow: auto; padding: 16px; padding-bottom: 96px; max-width: 760px; width: 100%; margin: 0 auto; }
+  nav {
+    position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--surface);
+    border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav button {
+    flex: 1; border: 0; background: none; color: var(--muted); padding: 10px 4px 12px;
+    font: inherit; font-size: 13px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  nav button svg { width: 22px; height: 22px; }
+  nav button[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+  nav button[hidden] { display: none; }
+  section[hidden] { display: none; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+          padding: 14px; box-shadow: var(--shadow); margin-bottom: 12px; }
+  label { display: block; font-size: 14px; color: var(--muted); margin: 10px 0 4px; }
+  input, textarea, select {
+    width: 100%; font: inherit; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+  }
+  textarea { resize: vertical; min-height: 84px; }
+  input:focus, textarea:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > * { flex: 1; }
+  .btn {
+    border: 0; border-radius: 10px; padding: 11px 16px; font: inherit; font-weight: 600;
+    background: var(--accent); color: var(--accent-text); cursor: pointer; flex: 0 0 auto;
+  }
+  .btn.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); }
+  .btn.small { padding: 6px 10px; font-size: 14px; font-weight: 500; }
+  .btn:disabled { opacity: .5; }
+  .msgs { display: flex; flex-direction: column; gap: 10px; }
+  .msg { scroll-margin-bottom: 180px; padding: 10px 12px; border-radius: 14px; max-width: 88%; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-text); border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg .actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .composer {
+    position: fixed; left: 0; right: 0; bottom: calc(62px + env(safe-area-inset-bottom));
+    background: var(--bg); padding: 8px 16px; border-top: 1px solid var(--line);
+  }
+  .composer .inner { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; }
+  .composer textarea { min-height: 44px; max-height: 140px; resize: none; }
+  #chat { padding-bottom: 110px; }
+  .seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin-bottom: 12px; }
+  .seg button { border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 8px; }
+  .seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+  .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
+  .badge.read { background: var(--accent-soft); color: var(--accent); }
+  .badge.write { background: var(--warn-soft); color: var(--warn); }
+  .badge.danger { background: var(--danger-soft); color: var(--danger); }
+  .muted { color: var(--muted); font-size: 14px; }
+  .out { white-space: pre-wrap; word-wrap: break-word; }
+  .skill { cursor: pointer; }
+  .skill h3 { margin: 0 0 4px; font-size: 15px; word-break: break-all; }
+  .notice { padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); margin-bottom: 12px; }
+  .error { background: var(--danger-soft); color: var(--danger); }
+  #login { max-width: 420px; margin: 10vh auto 0; }
+  pre.report { white-space: pre-wrap; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; }
+  .empty { text-align: center; color: var(--muted); padding: 32px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot" title="connection"></span>
+  <h1>Libra</h1>
+  <button class="btn small secondary" id="logout" hidden>Sign out</button>
+</header>
+
+<main>
+  <section id="login" hidden>
+    <div class="card">
+      <h2 style="margin-top:0">Connect</h2>
+      <p class="muted">Enter the access token shown when the server started, or in <code>~/.libra/server-token</code> on the server.</p>
+      <label for="token">Access token</label>
+      <input id="token" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
+      <p id="login-error" class="muted" role="alert"></p>
+      <button class="btn" id="login-btn">Connect</button>
+    </div>
+  </section>
+
+  <section id="chat" hidden>
+    <div class="seg" id="mode" hidden>
+      <button data-mode="files" aria-pressed="true">Your files</button>
+      <button data-mode="model" aria-pressed="false">Model</button>
+    </div>
+    <div class="msgs" id="msgs"></div>
+    <div class="empty" id="chat-empty">Ask about your files, ask for a translation, or try <em>“what is 12*7”</em>.</div>
+  </section>
+
+  <section id="translate" hidden>
+    <div class="card">
+      <label for="tr-text">Text</label>
+      <textarea id="tr-text" placeholder="Type or paste text"></textarea>
+      <div class="row">
+        <div><label for="tr-from">From</label>
+          <input id="tr-from" list="langs" value="auto" autocapitalize="off"></div>
+        <button class="btn small secondary" id="tr-swap" aria-label="Swap languages" style="margin-top:28px">⇄</button>
+        <div><label for="tr-to">To</label>
+          <input id="tr-to" list="langs" value="Spanish" autocapitalize="off"></div>
+      </div>
+      <datalist id="langs"></datalist>
+      <p><button class="btn" id="tr-go">Translate</button></p>
+      <div id="tr-out" class="out"></div>
+    </div>
+  </section>
+
+  <section id="skills" hidden>
+    <div class="row" style="margin-bottom:12px">
+      <input id="sk-q" type="search" placeholder="Search skills, e.g. weather, send email">
+      <button class="btn" id="sk-go">Search</button>
+    </div>
+    <p class="muted" id="sk-count"></p>
+    <div id="sk-list"></div>
+    <div id="sk-form" class="card" hidden></div>
+  </section>
+
+  <section id="training" hidden>
+    <div class="card">
+      <div class="row">
+        <button class="btn" id="au-run">Run now</button>
+        <button class="btn secondary" id="au-dry">Dry run</button>
+        <span></span>
+      </div>
+      <p class="muted" id="au-state"></p>
+    </div>
+    <div class="card"><pre class="report" id="au-report">Loading…</pre></div>
+  </section>
+</main>
+
+<div class="composer" id="composer" hidden>
+  <div class="inner">
+    <textarea id="input" rows="1" placeholder="Message" aria-label="Message"></textarea>
+    <button class="btn" id="send">Send</button>
+  </div>
+</div>
+
+<nav id="tabs" hidden role="tablist">
+  <button data-tab="chat" aria-selected="true" role="tab">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chat</button>
+  <button data-tab="translate" role="tab">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h8M8 3v2m3 0c-1 5-4 9-7 11m3-6c1.5 2.5 3.5 4 6 5"/><path d="M13 21l4-10 4 10m-7-3h6"/></svg>Translate</button>
+  <button data-tab="skills" role="tab">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/></svg>Skills</button>
+  <button data-tab="training" role="tab" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>Training</button>
+</nav>
+
+<script src="/app.js"></script>
+</body>
+</html>
