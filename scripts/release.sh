@@ -33,6 +33,7 @@ code="$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' android/app/build.gradle)"
 sed -i "s/versionCode $code/versionCode $((code + 1))/; s/versionName '.*'/versionName '$new'/" android/app/build.gradle
 sed -i "0,/<version>$old<\/version>/s//<version>$new<\/version>/" clients/java/pom.xml
 sed -i "s/\"version\": \"$old\"/\"version\": \"$new\"/" .claude-plugin/marketplace.json
+sed -i "s#<version>$old</version>#<version>$new</version>#; s#ai.libra:libra-client:$old#ai.libra:libra-client:$new#" clients/java/README.md
 if ! grep -q "^## \[$new\]" CHANGELOG.md; then   # turn "Unreleased" into this release
   sed -i "s/^## \[Unreleased\]/## [Unreleased]\n\n## [$new] - $(date +%F)/" CHANGELOG.md
 fi

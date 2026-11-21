@@ -5,7 +5,7 @@ name: release
 #   and SHA256SUMS, and the Java client (ai.libra:libra-client) to GitHub Packages.
 on:
   push:
-    tags: ['v*.*.*']
+    tags: ['v*.*.*', 'V*.*.*']   # a capital V only runs the check below, which explains and stops
   workflow_dispatch:   # a dry run: builds the artifacts without publishing a release
 
 permissions:
@@ -13,7 +13,18 @@ permissions:
   packages: write
 
 jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release tags start with a lowercase v
+        run: |
+          case "$GITHUB_REF_NAME" in
+            V*) echo "::error::The tag $GITHUB_REF_NAME starts with a capital V. Release tags are lowercase, like v${GITHUB_REF_NAME#V}: delete this tag and push v${GITHUB_REF_NAME#V} instead. Nothing was built or published."
+                exit 1 ;;
+          esac
+
   python:
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -40,6 +51,7 @@ jobs:
           path: dist/
 
   android:
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -81,6 +93,7 @@ jobs:
           path: out/
 
   java:
+    needs: tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

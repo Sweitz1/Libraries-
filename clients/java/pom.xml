@@ -6,7 +6,7 @@
 
   <groupId>ai.libra</groupId>
   <artifactId>libra-client</artifactId>
-  <version>0.15.0</version>
+  <version>0.16.0</version>
   <packaging>jar</packaging>
 
   <name>Libra client for Java</name>

@@ -55,7 +55,7 @@ and in your `pom.xml`:
   <dependency>
     <groupId>ai.libra</groupId>
     <artifactId>libra-client</artifactId>
-    <version>0.15.0</version>
+    <version>0.16.0</version>
   </dependency>
 </dependencies>
 ```
@@ -73,7 +73,7 @@ repositories {
     }
 }
 dependencies {
-    implementation "ai.libra:libra-client:0.15.0"
+    implementation "ai.libra:libra-client:0.16.0"
 }
 ```
 
