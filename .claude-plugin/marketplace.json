@@ -1,0 +1,27 @@
+{
+  "name": "libra",
+  "description": "Claude Code skills for working on Libra, the from-scratch language model and agent",
+  "owner": {
+    "name": "Sweitz1",
+    "url": "https://github.com/Sweitz1"
+  },
+  "plugins": [
+    {
+      "name": "libra-skills",
+      "displayName": "Libra skills",
+      "source": "./",
+      "description": "Skills for a Libra checkout: verify changes, run the app, answer reviews, add Libra skills, explain the code (how, why), keep changes small (yagni, reducer), validate configs and data, release and deploy",
+      "version": "0.15.0",
+      "author": {
+        "name": "Sweitz1",
+        "url": "https://github.com/Sweitz1"
+      },
+      "homepage": "https://github.com/Sweitz1/Libraries-",
+      "repository": "https://github.com/Sweitz1/Libraries-",
+      "license": "MIT",
+      "keywords": ["libra", "language-model", "agent", "numpy", "skills"],
+      "category": "development",
+      "skills": ["./.claude/skills/"]
+    }
+  ]
+}

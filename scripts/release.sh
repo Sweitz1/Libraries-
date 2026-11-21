@@ -14,6 +14,7 @@ check() {
   grep -q "__version__ = \"$v\"" libra/__init__.py || { echo "libra/__init__.py doesn't say $v"; exit 1; }
   grep -q "versionName '$v'" android/app/build.gradle || { echo "android/app/build.gradle doesn't say $v"; exit 1; }
   grep -q "<version>$v</version>" clients/java/pom.xml || { echo "clients/java/pom.xml doesn't say $v"; exit 1; }
+  grep -q "\"version\": \"$v\"" .claude-plugin/marketplace.json || { echo ".claude-plugin/marketplace.json doesn't say $v"; exit 1; }
   grep -q "^## \[$v\]" CHANGELOG.md || { echo "CHANGELOG.md has no '## [$v]' section"; exit 1; }
   echo "version $v is consistent"
 }
@@ -31,6 +32,7 @@ sed -i "s/__version__ = \"$old\"/__version__ = \"$new\"/" libra/__init__.py
 code="$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' android/app/build.gradle)"
 sed -i "s/versionCode $code/versionCode $((code + 1))/; s/versionName '.*'/versionName '$new'/" android/app/build.gradle
 sed -i "0,/<version>$old<\/version>/s//<version>$new<\/version>/" clients/java/pom.xml
+sed -i "s/\"version\": \"$old\"/\"version\": \"$new\"/" .claude-plugin/marketplace.json
 if ! grep -q "^## \[$new\]" CHANGELOG.md; then   # turn "Unreleased" into this release
   sed -i "s/^## \[Unreleased\]/## [Unreleased]\n\n## [$new] - $(date +%F)/" CHANGELOG.md
 fi
