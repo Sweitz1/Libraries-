@@ -13,6 +13,7 @@ First public release.
 - **Durable jobs** (`libra jobs`, `/v1/jobs`): goals that survive restarts, pause for approval and end with a checked result.
 - **Per-goal permissions**, and outside content (web, MCP/API, memories) can no longer drive a change without a person.
 - **Benchmarks** (`libra eval`): planner tool choice, held-out loss, behaviour by multiple choice, and a history. Training can require the behaviour score not to drop.
+- **Java client** (`ai.libra:libra-client`, `clients/java/`): pairing links, chat, translation, skills, jobs and training status with no dependencies. Published to GitHub Packages and attached to each release.
 - **Per-device tokens** (`libra devices`), revocable one by one; pairing links never carry the main token.
 - Publishing: issue and pull-request templates, `templates/`, `scripts/release.sh`, and a release workflow that publishes the Python packages and the APK with checksums.
 
@@ -24,6 +25,7 @@ First public release.
 - Checkpoints are published atomically, so a reload never sees new weights with an old tokenizer.
 - Without a held-out split, training reports training loss instead of calling it validation loss.
 - Goals with quoted text containing several sentences are no longer split inside the quote.
+- `summarize` returned every sentence when all of them were very short, ignoring the requested count. Found by the Java client's live test.
 
 ## [0.11.0] and earlier
 

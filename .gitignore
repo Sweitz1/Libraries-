@@ -86,3 +86,4 @@ android/build/
 android/app/build/
 android/local.properties
 *.jks
+clients/java/target/
