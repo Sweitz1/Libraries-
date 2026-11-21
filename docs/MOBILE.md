@@ -18,14 +18,14 @@ The app's screens are the same web app the server serves at `/`, so every featur
 2. Copy `libra.apk` to the phone and open it. Android asks you to allow installing from that source (Files, Chrome or Drive) once.
 3. Requires Android 8.0 or newer.
 
-Without a release key, the APK is signed with a debug key. Android installs it fine, but updates must use the same key. To sign properly, create a keystore once:
+Without a release key, each CI build signs the APK with a new temporary debug key. Android installs it fine, but a later APK can't update it: you'd have to uninstall first, and that loses the app's sign-in. To sign properly, create a keystore once:
 
 ```bash
 keytool -genkeypair -v -keystore libra-release.jks -alias libra -keyalg RSA -keysize 4096 -validity 10000
 base64 -w0 libra-release.jks   # paste into the repository secret LIBRA_KEYSTORE_BASE64
 ```
 
-Then add the secrets `LIBRA_KEYSTORE_PASSWORD`, `LIBRA_KEY_ALIAS` (`libra`) and `LIBRA_KEY_PASSWORD`. Keep the `.jks` file safe: you need the same key for every future update.
+Then add the secrets `LIBRA_KEYSTORE_PASSWORD`, `LIBRA_KEY_ALIAS` (`libra`) and `LIBRA_KEY_PASSWORD`. Keep the `.jks` file safe: you need the same key for every future update. To re-sign a release that's already published, re-run its workflow (Actions → release → the tag's run → *Re-run all jobs*); the files are replaced.
 
 ## Pair it
 
