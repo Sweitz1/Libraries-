@@ -946,6 +946,9 @@ def cmd_crawl(args) -> None:
 def cmd_data(args) -> None:
     from .dataset import Dataset
 
+    if args.allow_private:
+        os.environ["LIBRA_ALLOW_PRIVATE"] = "1"  # --url and --gutenberg downloads use it too
+
     ds = Dataset(min_chars=args.min_chars)
     print("reading sources:")
     for path in args.inputs:

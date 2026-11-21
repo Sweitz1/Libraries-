@@ -293,13 +293,16 @@ class Dataset:
 
 
 def fetch(url: str, timeout: int = 60) -> tuple[str, str]:
+    """Download one page you asked for, with the same guard as every other fetch: no private or local
+    addresses (unless --allow-private), every redirect checked, environment proxies only when trusted."""
+    from .web import Fetcher
+
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"only http(s) URLs are supported: {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        ctype = r.headers.get("Content-Type", "")
-        charset = r.headers.get_content_charset() or "utf-8"
-        return r.read(50_000_000).decode(charset, errors="replace"), ctype.lower()
+    fetcher = Fetcher(user_agent=USER_AGENT, timeout=timeout, max_bytes=50_000_000, respect_robots=False,
+                      allow_private=os.environ.get("LIBRA_ALLOW_PRIVATE") == "1")
+    r = fetcher.get(url)  # a single download you chose, like a browser: robots.txt is for crawlers
+    return r.text, r.content_type
 
 
 PRESETS = [  # (max tokens, name, flags, batch*ctx)

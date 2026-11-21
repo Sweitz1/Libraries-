@@ -670,7 +670,8 @@ The crawler and scraper are polite and safe by default:
 - They obey robots.txt, including `Crawl-delay`, and wait `--delay` seconds (default 1) between requests to a site.
 - They stay on the starting site unless you pass `--any-site`, and skip images, archives and media.
 - Pages with identical content are fetched but not saved twice. Downloads are capped at 10 MB.
-- They refuse local and LAN addresses (including after redirects) unless you pass `--allow-private`. That stops a served Libra from being used to probe your network.
+- They refuse local and LAN addresses (including after redirects) unless you pass `--allow-private`. That stops a served Libra from being used to probe your network. `libra data --url` and `--gutenberg` downloads go through the same check.
+- They connect directly and ignore `HTTP(S)_PROXY`, because through a proxy Libra can't check where the connection really goes. If your network needs a proxy, and that proxy enforces its own destination rules, set `LIBRA_USE_PROXY=1`. Names that don't resolve locally are then refused rather than handed to the proxy.
 
 `--ignore-robots` exists for sites you own. Respect each website's terms, and only use text you have the right to use.
 

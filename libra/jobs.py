@@ -95,6 +95,8 @@ def _event(job: dict, what: str, **details) -> None:
     rec = {"at": _now(), "event": what, **details}
     with open(os.path.join(_dir(job["id"]), "events.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+        f.flush()
+        os.fsync(f.fileno())  # the journal is evidence of what ran: it must survive a power cut too
 
 
 def get(job_id: str) -> dict:
@@ -108,9 +110,18 @@ def get(job_id: str) -> dict:
 def events(job_id: str) -> list[dict]:
     try:
         with open(os.path.join(_dir(job_id), "events.jsonl"), encoding="utf-8") as f:
-            return [json.loads(l) for l in f if l.strip()]
+            lines = [l for l in f if l.strip()]
     except FileNotFoundError:
         return []
+    out = []
+    for i, line in enumerate(lines):
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            if i == len(lines) - 1:
+                break  # a crash mid-append leaves a torn last line: everything before it still counts
+            out.append({"event": "unreadable", "line": i + 1})  # damage elsewhere is shown, not hidden
+    return out
 
 
 def listing(n: int = 20) -> list[dict]:
