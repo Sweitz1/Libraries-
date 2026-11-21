@@ -12,6 +12,9 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - **Continuing a job after its time limit approved the next step too**, even a change. Now it only lifts the limit.
 - Jobs refuse to run where file locking isn't available instead of running without a lock, and the jobs folder is private to its owner (0700).
 
+### Added
+- Change skills can declare a read-only `verify` (did it take effect?) and `reconcile` (after a crash, had it already happened?). A failed or inconclusive check makes the job `needs_review`; a confirmed one after a crash isn't repeated. `libra.skills.idempotency_key()` gives each change call a key that is stable across retries, for services that remove duplicates. `remember` has both checks.
+
 ### Fixed
 - Job event journals are synced to disk, and a line torn by a crash no longer stops `libra jobs` from reading the history.
 

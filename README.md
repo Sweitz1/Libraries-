@@ -347,6 +347,8 @@ libra jobs cancel <id>
 Scheduled goals, and plain goals started from the app, run as jobs. The app's **Agent** tab lists them, with **Approve**, **Skip step** and **Cancel** buttons. Over HTTP: `POST /v1/jobs {"goal": …}`, `GET /v1/jobs`, `GET /v1/jobs/<id>`, `POST /v1/jobs/<id>/approve|skip|cancel|resume`. The approve body can name the operation it approves, `{"operation_digest": "…"}` (from `waiting.operation`); if the job changed since, the answer is 409.
 
 - **An approval covers one exact operation.** A waiting job shows what would run: the skill, its risk and the concrete arguments, with a SHA-256 digest of them, the job and the step. The approval is bound to that digest and used once. If anything changes before it runs (other arguments, another skill or risk), the job asks again. Approvals saved before 0.16 have no digest, so they ask again too. Continuing after a time limit never approves a change.
+- **Changes are checked by their effect, not their reply.** A skill that changes something can give a read-only `verify` that looks at the result itself (the memory file, the sent message, the API record). A job is `done` only if every such check passes. If one fails or can't tell, the job is `needs_review`, even though the skill said it worked. `libra jobs show` lists each change as confirmed, failed, could not tell, or not checked (the skill has no `verify`).
+- **After a crash, a change is reconciled before anyone is asked.** If the runner died during a change and the skill has a read-only `reconcile`, Libra asks it whether the change already happened. Yes: the step is recorded as done and not repeated. No: it runs again, with the usual trust rules (so it may ask). Can't tell, or no `reconcile`: it waits for you, as before. `remember` has both checks built in.
 
 - **Saved as it goes.** The job file is replaced atomically before and after every step, and after every item of an "each of them" step. A crash, a reboot or `kill -9` loses at most the step in progress.
 - **Resumes without redoing work.** Finished steps and finished items are kept. The server resumes interrupted jobs when it starts, and the agent timer does too.
@@ -512,6 +514,26 @@ def greet(name: str, times: int = 1) -> str:
 libra chat --plugins my_plugins/          # /greet Ana times=2   or just: greet Ana
 libra serve --plugins my_plugins/ --auto-skills
 ```
+
+A plugin that changes something can say how to check it. Both functions only look, and each returns `True`, `False` or `None` (can't tell):
+
+```python
+from libra.skills import idempotency_key, skill
+
+def _exists(args, result=None):            # did the file get written? read it back
+    try:
+        return open(args["path"], encoding="utf-8").read() == args["text"]
+    except FileNotFoundError:
+        return False
+
+@skill("save_note", "Save a note to a file", risk="write", verify=_exists, reconcile=_exists)
+def save_note(path: str, text: str):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return f"saved {path}"
+```
+
+`verify(args, result)` runs after the change; `reconcile(args)` runs after a crash. For a service that removes duplicates by key, send `idempotency_key()` (for example as an `Idempotency-Key` header). It stays the same for one call of one job step across retries and restarts.
 
 Plugins in `~/.libra/plugins/` load automatically. Return a string, or a dict or list (shown as JSON). Mark read-only skills with `risk="read"`. The default is `"write"`, which asks before running. To fetch web pages, use `libra.skills.fetcher()` so `--allow-private` applies. See `plugins/example_tools.py`. **Plugins run with your permissions, so only load code you trust.**
 

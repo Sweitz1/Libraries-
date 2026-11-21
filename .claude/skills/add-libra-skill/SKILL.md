@@ -13,6 +13,7 @@ argument-hint: "[what the skill should do]"
   - `"danger"` is hard to undo.
   - Never mark something `read` to avoid the approval prompt.
 - **Outside content is marked.** A skill that returns text from a website, another service or stored earlier results gets `external=True` (built-ins: add its name to `EXTERNAL_BUILTINS` in `libra/skills.py`). That output can then never drive a change without a person approving it.
+- **Changes can be checked.** Give a `write` or `danger` skill a read-only `verify=(args, result) -> True/False/None` that looks at the effect itself (read the file back, fetch the record), and a `reconcile=(args) -> True/False/None` that answers "had it already happened?" after a crash. Without them, a job reports the change as "not checked", and an interrupted one waits for a person. Calls to outside services send `libra.skills.idempotency_key()` when the service supports a key.
 - **Results are useful to later steps.** Return a string, or a dict or list for structured data. `"each of them"` goal steps iterate over a list's `url`, `link` or `text`.
 - **Failures are words, not crashes.** Raise with a clear message; `SkillRegistry.run` turns it into a failed result.
 

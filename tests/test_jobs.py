@@ -45,9 +45,23 @@ def build_registry(state: str, allow_send: bool = False):
         time.sleep(float(os.environ.get("LIBRA_TEST_SLOW_DIGEST", "0")))
         return f"{text}: three new posts about gardening."
 
+    # LIBRA_TEST_CHECKS gives send_report an effect check (pass, fail, unknown or crash) and a reconcile
+    mode = os.environ.get("LIBRA_TEST_CHECKS", "")
+
+    def sent(args, result=None):
+        if result is not None and mode != "pass":
+            if mode == "crash":
+                raise RuntimeError("the mail server's API is down")
+            return {"fail": False, "unknown": None}[mode]
+        return bool(calls(state, "send"))  # look at the effect itself, not the skill's reply
+
     @reg.skill("send_report", "Send the report to me", risk="write",
-               router=lambda m: {"body": "{prev}"} if "send the report" in m.lower() else None)
+               router=lambda m: {"body": "{prev}"} if "send the report" in m.lower() else None,
+               verify=sent if mode else None, reconcile=sent if mode else None)
     def send_report(body: str):
+        from libra.skills import idempotency_key
+
+        note("key", idempotency_key() or "")
         note("send", str(body.count("##")))
         time.sleep(float(os.environ.get("LIBRA_TEST_SLOW_SEND", "0")))
         return f"Report sent with {body.count('##')} digests."
@@ -85,7 +99,7 @@ class JobsTest(unittest.TestCase):
         os.environ["LIBRA_HOME"] = self.home
 
     def tearDown(self):
-        for k in ("LIBRA_TEST_SLOW_DIGEST", "LIBRA_TEST_SLOW_SEND"):
+        for k in ("LIBRA_TEST_SLOW_DIGEST", "LIBRA_TEST_SLOW_SEND", "LIBRA_TEST_CHECKS"):
             os.environ.pop(k, None)
         if self.old is None:
             os.environ.pop("LIBRA_HOME", None)
@@ -342,6 +356,77 @@ class JobsTest(unittest.TestCase):
         job = jobs.run(job["id"], reg, retry_delay=0)
         self.assertEqual((job["status"], job["waiting"]["kind"]), ("waiting", "approval"))
         self.assertEqual(calls(self.state, "send"), [])
+
+    def test_a_change_is_checked_by_its_effect_not_its_reply(self):
+        from libra import jobs
+
+        job = jobs.run(jobs.create(GOAL, build_registry(self.state, allow_send=True))["id"],
+                       build_registry(self.state, allow_send=True), retry_delay=0)
+        self.assertEqual(job["status"], "done")  # no verify: still done, but says so
+        self.assertEqual(job["result"]["effects"], [{"step": 3, "skill": "send_report", "status": "not_checked"}])
+
+        for mode, effect in (("pass", "passed"), ("fail", "failed"), ("unknown", "unknown"), ("crash", "unknown")):
+            os.environ["LIBRA_TEST_CHECKS"] = mode
+            reg = build_registry(self.state, allow_send=True)
+            job = jobs.run(jobs.create(GOAL, reg)["id"], reg, retry_delay=0)
+            self.assertEqual(job["result"]["effects"][0]["status"], effect, mode)
+            if effect == "passed":
+                self.assertEqual((job["status"], job["result"]["verified"]), ("done", True))
+            else:  # the skill said "Report sent", but that isn't proof: a person looks
+                self.assertEqual((job["status"], job["result"]["verified"]), ("needs_review", False), mode)
+                self.assertIn("effect check", job["result"]["problems"][-1])
+        self.assertIn("mail server", job["steps"][2]["evidence"][0]["note"])
+
+    def test_a_crash_during_a_change_is_reconciled_not_repeated(self):
+        from libra import jobs
+
+        # killed while the report was being sent: reconcile sees it went, so it isn't sent again or asked about
+        job_id = self.kill_when(lambda j: j["steps"][2]["status"] == "running" and calls(self.state, "send"),
+                                LIBRA_TEST_SLOW_SEND="5", LIBRA_TEST_CHECKS="pass")
+        os.environ["LIBRA_TEST_CHECKS"] = "pass"
+        job = jobs.run(job_id, build_registry(self.state, allow_send=True), retry_delay=0)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(calls(self.state, "send"), ["3"])  # once
+        self.assertEqual(job["result"]["effects"][0]["status"], "passed")
+        self.assertIn({"happened": True}, [{k: e[k]} for e in jobs.events(job_id) if e["event"] == "reconciled"
+                                            for k in ("happened",)])
+
+    def test_reconcile_lets_a_change_that_never_happened_run_and_keys_stay_stable(self):
+        from libra import jobs
+        from libra.skills import idempotency_key
+
+        os.environ["LIBRA_TEST_CHECKS"] = "pass"
+        strict = build_registry(self.state)  # send_report asks
+        job = jobs.run(jobs.create(GOAL, strict)["id"], strict, retry_delay=0)
+        j = jobs.get(job["id"])  # as if the runner died just as the send started, before it went out
+        j["status"], j["waiting"], j["steps"][2]["status"] = "running", None, "running"
+        jobs._save(j)
+        allowed = build_registry(self.state, allow_send=True)
+        job = jobs.run(job["id"], allowed, retry_delay=0)
+        self.assertEqual(job["status"], "done")  # reconcile: it hadn't happened, so it ran (trust rules allow it)
+        self.assertEqual(calls(self.state, "send"), ["3"])
+        key = jobs._idem_key(job, job["steps"][2], None)
+        self.assertEqual(calls(self.state, "key"), [key])  # the same key a retry of this call would carry
+        self.assertTrue(key.startswith("libra-") and len(key) == 38)
+        self.assertIsNone(idempotency_key())  # only set during a job's change
+
+        os.remove(os.path.join(self.state, "send"))  # a fresh mailbox: nothing sent yet
+        job = jobs.run(jobs.create(GOAL, strict)["id"], strict, retry_delay=0)  # still asks when it should
+        j = jobs.get(job["id"])
+        j["status"], j["waiting"], j["steps"][2]["status"] = "running", None, "running"
+        jobs._save(j)
+        job = jobs.run(job["id"], strict, retry_delay=0)
+        self.assertEqual((job["status"], job["waiting"]["kind"]), ("waiting", "approval"))
+        self.assertEqual(calls(self.state, "send"), [])
+
+    def test_remember_checks_the_memory_file(self):
+        from libra import jobs
+
+        reg = build_registry(self.state)
+        reg.policy.set("remember", "allow")
+        job = jobs.run(jobs.create("remember that the boiler is serviced in May", reg)["id"], reg, retry_delay=0)
+        self.assertEqual(job["steps"][0]["skill"], "remember")
+        self.assertEqual((job["status"], job["result"]["effects"][0]["status"]), ("done", "passed"))
 
     def test_cancel_and_time_limit(self):
         from libra import jobs
