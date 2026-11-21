@@ -4,6 +4,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-21
+
 ### Documentation
 - **INSTALL.md**: an eight-lesson course for installing Libra's servers and apps (your computer, a rehearsal of the Debian installer, the service, Tailscale, the home-screen and Android apps, pairing, OpenAI-compatible apps, the Java client, Discord, upkeep and troubleshooting). `tests/test_learn.py` keeps its links, commands and installer options real.
 
@@ -32,6 +34,7 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - **Discord skills** for goals and the app, with the bot's token: `discord_history` (a channel's messages, treated as outside content), `discord_post` and `discord_react` (changes that ask first, are checked against Discord afterwards, and aren't repeated after a crash). Discord ids are checked to be numbers before they go into an API path. The invite link now includes *Add Reactions*.
 
 ### Fixed
+- **A release tag with a capital V (`V0.15.0`) did nothing:** the release workflow only runs for lowercase `v` tags, so no APK, packages or checksums were built, and nothing said why. A capital-V tag now stops at a first check that explains, and names the right tag. The Java client's README shows the version to install, and `scripts/release.sh` keeps it current.
 - **The Discord bot ignored `!` commands in servers.** Without the Message Content intent, Discord sends a bot empty text for server messages that don't mention it, but the docs and the bot's help said the prefix worked without it. In servers, the help now shows commands as @mentions, and the bot logs which mode it's in. `libra discord set message_content on` (after enabling the intent in the developer portal) makes `!` commands work there.
 - A damaged job file (cut off, or not a job) was hidden from `libra jobs list` and the app, and failed with a raw JSON error; the server answered "n must be a number". It's now listed as `damaged`, with the file's path, and resuming carries on with the other jobs.
 - A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
