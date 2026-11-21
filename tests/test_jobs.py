@@ -268,7 +268,7 @@ class JobsTest(unittest.TestCase):
     def test_a_second_runner_on_the_same_job_is_refused(self):
         from libra import jobs
 
-        env = dict(os.environ, PYTHONPATH=ROOT, LIBRA_TEST_SLOW_DIGEST="0.4")
+        env = dict(os.environ, PYTHONPATH=ROOT, LIBRA_TEST_SLOW_DIGEST="1.5")  # longer than LOCK_WAIT
         script = CHILD.format(tests=os.path.join(ROOT, "tests"), state=self.state, allow=True)
         child = subprocess.Popen([sys.executable, "-c", script], env=env, stdout=subprocess.PIPE, text=True)
         try:
@@ -290,6 +290,16 @@ class JobsTest(unittest.TestCase):
         self.assertEqual(calls(self.state, "collect"), [""])
         self.assertEqual(len(calls(self.state, "digest")), 3)  # each item digested exactly once
         self.assertEqual(calls(self.state, "send"), ["3"])
+
+    def test_checking_whether_a_job_runs_never_stops_it_starting(self):
+        from libra import jobs
+
+        reg = build_registry(self.state, allow_send=True)
+        job = jobs.create(GOAL, reg)
+        probe = jobs._Lock(job["id"])  # what is_running does, e.g. while the app lists the jobs
+        self.assertTrue(probe.acquire())
+        threading.Timer(0.3, probe.release).start()
+        self.assertEqual(jobs.run(job["id"], reg, retry_delay=0)["status"], "done")  # waited, then ran
 
     def test_a_torn_last_event_line_is_ignored(self):
         from libra import jobs
