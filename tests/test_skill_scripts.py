@@ -150,6 +150,31 @@ class LibraDataScriptsTest(unittest.TestCase):
         self.assertEqual(run(sys.executable, self.process, "--dry-run", "no-such-folder").returncode, 3)
 
 
+class VerificationLinkTest(unittest.TestCase):
+    script = os.path.join(ROOT, "scripts", "verification_link.py")
+
+    def test_page_pins_one_commit(self):
+        sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        r = run(sys.executable, self.script, "--commit", "HEAD", "--offline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        page = r.stdout
+        self.assertIn(f"/tree/{sha}", page)
+        self.assertIn(f"https://raw.githubusercontent.com/Sweitz1/Libraries-/{sha}/docs/REVIEW.md\n", page)  # own line
+        for section in ("## CI results for this commit", "## Read these first", "## Reproduce it", "## Not verified",
+                        "## A prompt for an AI reviewer"):
+            self.assertIn(section, page)
+        self.assertIn("Not checked when this page was written", page)  # --offline never invents CI results
+        for path in re.findall(rf"/blob/{sha}/([^)]+)\)", page):  # every pinned file exists at that commit
+            self.assertEqual(subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{sha}:{path}"]).returncode, 0, path)
+
+    def test_errors(self):
+        self.assertIn("Exit codes", run(sys.executable, self.script, "--help").stdout)
+        r = run(sys.executable, self.script, "--frob")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Usage:", r.stderr)
+        self.assertEqual(run(sys.executable, self.script, "--commit", "no-such-ref", "--offline").returncode, 3)
+
+
 class ReleaseScriptTest(unittest.TestCase):
     def test_missing_or_bad_version_explains_itself(self):
         script = os.path.join(ROOT, "scripts", "release.sh")
