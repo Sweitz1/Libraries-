@@ -8,6 +8,10 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - Web fetches ignore `HTTP(S)_PROXY` unless `LIBRA_USE_PROXY=1` marks the proxy as trusted. Through an untrusted proxy, a name only the proxy could resolve (an internal host) got past the private-address check. Even with a trusted proxy, names that don't resolve locally are refused.
 - `libra data --url` and `--gutenberg` downloads now use the guarded fetcher (they had no private-address check); `libra data --allow-private` covers them.
 
+- Job approvals are bound to the exact operation (a SHA-256 of the job, step, skill, risk and concrete arguments) and shown with it; a changed operation asks again, and `approve` can name the digest it means (`--digest`, `operation_digest`). Older approvals without a digest ask again.
+- **Continuing a job after its time limit approved the next step too**, even a change. Now it only lifts the limit.
+- Jobs refuse to run where file locking isn't available instead of running without a lock, and the jobs folder is private to its owner (0700).
+
 ### Fixed
 - Job event journals are synced to disk, and a line torn by a crash no longer stops `libra jobs` from reading the history.
 

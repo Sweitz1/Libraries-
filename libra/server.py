@@ -379,7 +379,10 @@ def make_handler(engine: Engine):
                     return
                 job_id, _, action = rest.partition("/")
                 if action == "approve":
-                    job = jobs.approve(job_id, by=self.principal)
+                    digest = body.get("operation_digest")
+                    if digest is not None and not isinstance(digest, str):
+                        raise ValueError("operation_digest must be a string")
+                    job = jobs.approve(job_id, by=self.principal, digest=digest)
                     engine.start_job(job_id)
                 elif action == "skip":
                     job = jobs.skip(job_id, by=self.principal)
@@ -394,7 +397,7 @@ def make_handler(engine: Engine):
                     return
                 self._json(200, {"job": job})
             except jobs.JobError as exc:
-                self._error(409 if "running" in str(exc) or "not waiting" in str(exc) else 404, str(exc))
+                self._error(409 if any(w in str(exc) for w in ("running", "not waiting", "locking")) else 404, str(exc))
             except ValueError as exc:
                 self._error(400, str(exc))
 

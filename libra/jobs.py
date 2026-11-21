@@ -61,7 +61,11 @@ def _now() -> str:
 
 def _root() -> str:
     d = home.path("jobs")
-    os.makedirs(d, exist_ok=True)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)  # jobs hold the concrete arguments of changes; older installs may be wider
+    except OSError:
+        pass
     return d
 
 
@@ -148,8 +152,10 @@ class _Lock:
 
     def acquire(self) -> bool:
         self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        if fcntl is None:  # pragma: no cover
-            return True
+        if fcntl is None:  # pragma: no cover - no tested lock here: refuse rather than risk two runners
+            os.close(self.fd)
+            self.fd = None
+            raise JobError("durable jobs need file locking (fcntl), which this platform doesn't have")
         try:
             fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -253,11 +259,36 @@ def create(goal: str, registry, name: str = "", autonomous: bool = False, permis
 
 
 # ------------------------------------------------------------------ running
+def _operation(job: dict, step: dict) -> dict:
+    """The exact operation a step would perform now: its skill, risk and concrete arguments (after
+    ``{prev}``/``{item}`` substitution, one call per remaining item). An approval is bound to its digest,
+    so it can't be used for anything else: other arguments, another skill, another risk, another job."""
+    from .agent import _items, _subst
+    from .trust import redact
+
+    prev_text, prev_data = _prev(job, step)
+    if step["foreach"]:
+        items = (step["items"] or _items(prev_data, prev_text))[: int(job["limits"]["max_items"])]
+        calls = [_subst(step["args"], prev_text, it) for it in items if it not in step["item_results"]]
+    else:
+        calls = [_subst(step["args"], prev_text)]
+    record = {"schema": "libra.operation.v1", "job": job["id"], "step": step["n"], "skill": step["skill"],
+              "risk": step["risk"], "calls": calls}
+    blob = json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=str)
+    return {"digest": hashlib.sha256(blob.encode("utf-8")).hexdigest(), "skill": step["skill"],
+            "risk": step["risk"], "calls": redact(calls[:5]), "count": len(calls)}  # what the owner is shown
+
+
 def _wait(job: dict, step: dict, kind: str, reason: str) -> None:
     job["status"] = "waiting"
     job["waiting"] = {"step": step["n"], "kind": kind, "reason": reason, "since": _now()}
+    if kind != "limit":
+        op = _operation(job, step)
+        job["waiting"]["operation"] = op
+        job["waiting"]["reason"] = reason + f" (operation {op['digest'][:12]})"
     _save(job)
-    _event(job, "waiting", step=step["n"] + 1, kind=kind, reason=reason)
+    _event(job, "waiting", step=step["n"] + 1, kind=kind, reason=job["waiting"]["reason"],
+           **({"operation": job["waiting"]["operation"]["digest"]} if kind != "limit" else {}))
 
 
 def _recover(job: dict) -> None:
@@ -278,14 +309,18 @@ def _recover(job: dict) -> None:
             return
 
 
-def _approved(job: dict, n: int) -> bool:
-    return any(a["step"] == n and not a.get("used") for a in job["approvals"])
+def _approved(job: dict, n: int, digest: str) -> bool:
+    """An unused approval for exactly this operation. Approvals without a digest (from before 0.16)
+    don't count: the owner confirms the concrete action again."""
+    return any(a["step"] == n and a.get("operation_digest") == digest and not a.get("used")
+               for a in job["approvals"])
 
 
-def _use_approval(job: dict, n: int) -> None:
+def _use_approval(job: dict, n: int, digest: str) -> None:
     for a in job["approvals"]:
-        if a["step"] == n and not a.get("used"):
+        if a["step"] == n and a.get("operation_digest") == digest and not a.get("used"):
             a["used"] = _now()
+            return
 
 
 def _prev(job: dict, step: dict) -> tuple[str, object]:
@@ -424,9 +459,16 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
         job = get(job_id)
         if job["status"] in FINAL:
             return job
-        if job["status"] == "waiting" and job["waiting"]["kind"] != "limit" \
-                and not _approved(job, job["waiting"]["step"]):
-            return job  # paused until the owner approves or skips
+        if job["status"] == "waiting" and job["waiting"]["kind"] != "limit":
+            w = job["waiting"]
+            step = job["steps"][w["step"]]
+            if not _approved(job, w["step"], _operation(job, step)["digest"]):
+                if any(a["step"] == w["step"] and not a.get("used") for a in job["approvals"]):
+                    # approved, but not this operation (it changed, or the approval predates digests)
+                    _event(job, "approval refused", step=w["step"] + 1, reason="the operation changed")
+                    _wait(job, step, w["kind"], "the operation changed since it was approved, so the approval "
+                          "doesn't cover it. Check it again: " + w["reason"].split(" (operation ")[0])
+                return job  # paused until the owner approves or skips
         if job["status"] != "waiting":
             _recover(job)
             if job["status"] == "waiting":
@@ -467,7 +509,8 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
                 step["status"], step["error"] = "failed", f"{step['skill']} is outside this goal's permissions"
                 _save(job)
                 continue
-            approved = _approved(job, step["n"])  # one approval covers this one step, once
+            digest = _operation(job, step)["digest"]
+            approved = _approved(job, step["n"], digest)  # one approval covers this exact operation, once
             preapproved = step["skill"] in (perms.get("preapproved") or [])
             confirm = getattr(registry, "confirm", None)
             # outside content (a web page, an API, memories) is data: it may not drive a change unasked
@@ -475,7 +518,7 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
             if step["risk"] != "read" and sources and not (approved or preapproved):
                 if confirm is not None and confirm(registry.get(step["skill"]), step["args"]):
                     job["approvals"].append({"step": step["n"], "by": "terminal", "at": _now(),
-                                             "kind": "untrusted_input"})
+                                             "kind": "untrusted_input", "operation_digest": digest})
                     approved = True
                 else:
                     _wait(job, step, "untrusted_input",
@@ -489,7 +532,8 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
                     approved = True
                 elif decision == "ask" and confirm is not None and confirm(registry.get(step["skill"]),
                                                                             step["args"]):
-                    job["approvals"].append({"step": step["n"], "by": "terminal", "at": _now(), "kind": "approval"})
+                    job["approvals"].append({"step": step["n"], "by": "terminal", "at": _now(), "kind": "approval",
+                                             "operation_digest": digest})
                     _event(job, "approved", step=step["n"] + 1, by="terminal")
                     approved = True
                 elif decision == "ask":
@@ -499,7 +543,8 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
             if log:
                 log(f"step {step['n'] + 1}: {step['skill']} ← {step['clause']}")
             if approved:
-                _use_approval(job, step["n"])
+                _use_approval(job, step["n"], digest)
+            step["operation"] = digest  # what was dispatched; _run_step saves it before the skill is called
             outcome = _run_step(job, step, registry, retry_delay, cancelled, approved)
             if outcome == "failed":
                 outcome = _try_alternatives(job, step, registry, retry_delay, cancelled)
@@ -517,15 +562,26 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
 
 
 # --------------------------------------------------------- owner decisions
-def approve(job_id: str, by: str = "owner") -> dict:
+def approve(job_id: str, by: str = "owner", digest: str | None = None) -> dict:
+    """Approve the operation the job is waiting on. ``digest`` (or at least its first 8 characters), when
+    given, must match it, so an approval made while looking at an older version of the job is refused."""
     with _Lock(job_id):
         job = get(job_id)
         if job["status"] != "waiting":
             raise JobError(f"job {job_id} is {job['status']}, not waiting")
-        n = job["waiting"]["step"]
-        job["approvals"].append({"step": n, "by": by, "at": _now(), "kind": job["waiting"]["kind"]})
+        w = job["waiting"]
+        n = w["step"]
+        op = w.get("operation") if w["kind"] != "limit" else None
+        if op is None and w["kind"] != "limit":
+            op = _operation(job, job["steps"][n])  # waiting since before 0.16: bind to what would run now
+        if digest is not None and (op is None or len(digest) < 8 or not op["digest"].startswith(digest.lower())):
+            raise JobError(f"job {job_id} is not waiting on operation {digest}: it changed; check it again")
+        rec = {"step": n, "by": by, "at": _now(), "kind": w["kind"]}
+        if op is not None:
+            rec["operation_digest"] = op["digest"]
+        job["approvals"].append(rec)
         _save(job)
-        _event(job, "approved", step=n + 1, by=by)
+        _event(job, "approved", step=n + 1, by=by, **({"operation": op["digest"]} if op else {}))
         return job
 
 
@@ -569,7 +625,8 @@ def resume_all(registry, log=None, retry_delay: float = 2.0) -> list[dict]:
         if item["running"] or item["status"] in FINAL:
             continue
         job = get(item["id"])
-        if job["status"] == "waiting" and not _approved(job, job["waiting"]["step"]):
+        if job["status"] == "waiting" and not any(a["step"] == job["waiting"]["step"] and not a.get("used")
+                                                  for a in job["approvals"]):
             continue  # needs the owner (approval, an interrupted change, or a time limit to lift)
         if log:
             log(f"resuming job {job['id']}: {job['goal']}")
@@ -624,6 +681,11 @@ def describe(job: dict) -> str:
             lines.append(f"        {s['error'][:200]}")
     if job.get("waiting"):
         lines.append(f"\nWaiting: {job['waiting']['reason']}")
+        op = job["waiting"].get("operation")
+        if op:
+            lines.append(f"  would run {op['skill']} ({op['risk']}), {op['count']} call(s): "
+                         + json.dumps(op["calls"], ensure_ascii=False)[:600])
+            lines.append(f"  operation {op['digest']}  (libra jobs approve {job['id']} --digest {op['digest'][:12]})")
         lines.append(f"  libra jobs approve {job['id']}   or   libra jobs skip {job['id']}")
     res = job.get("result")
     if res:

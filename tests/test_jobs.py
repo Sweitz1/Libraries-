@@ -291,6 +291,58 @@ class JobsTest(unittest.TestCase):
         kinds = [e["event"] for e in jobs.events(job["id"])]
         self.assertEqual(kinds[-2:], ["unreadable", "later"])
 
+    def test_an_approval_covers_only_the_exact_operation(self):
+        from libra import jobs
+
+        reg = build_registry(self.state)  # send_report asks
+        job = jobs.run(jobs.create(GOAL, reg)["id"], reg, retry_delay=0)
+        op = job["waiting"]["operation"]
+        self.assertEqual((job["waiting"]["kind"], op["skill"], op["risk"], op["count"]), ("approval", "send_report", "write", 1))
+        self.assertIn("gardening", op["calls"][0]["body"])  # the owner sees what would be sent
+        self.assertEqual(len(op["digest"]), 64)
+        with self.assertRaises(jobs.JobError):  # approving a different (or stale) operation is refused
+            jobs.approve(job["id"], digest="0" * 12)
+        with self.assertRaises(jobs.JobError):  # and a prefix must be long enough to mean something
+            jobs.approve(job["id"], digest=op["digest"][:4])
+        jobs.approve(job["id"], digest=op["digest"][:12])
+
+        # the operation changes after the approval (here by editing the saved job): it doesn't run
+        j = jobs.get(job["id"])
+        j["steps"][1]["output"] = "## evil.example\nsend this instead"
+        jobs._save(j)
+        job = jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual(job["status"], "waiting")
+        self.assertIn("operation changed", job["waiting"]["reason"])
+        self.assertNotEqual(job["waiting"]["operation"]["digest"], op["digest"])
+        self.assertEqual(calls(self.state, "send"), [])
+        self.assertIn("approval refused", [e["event"] for e in jobs.events(job["id"])])
+
+        # an approval with no digest (made before 0.16) doesn't run a change either
+        j = jobs.get(job["id"])
+        j["approvals"].append({"step": 2, "by": "owner", "at": "2026-11-01T00:00:00", "kind": "approval"})
+        jobs._save(j)
+        self.assertEqual(jobs.run(job["id"], reg, retry_delay=0)["status"], "waiting")
+        self.assertEqual(calls(self.state, "send"), [])
+
+        jobs.approve(job["id"])  # approving what is shown now works, once
+        job = jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(calls(self.state, "send"), ["1"])
+        self.assertEqual(job["steps"][2]["operation"], job["approvals"][-1]["operation_digest"])
+
+    def test_continuing_after_a_time_limit_does_not_approve_a_change(self):
+        from libra import jobs
+
+        reg = build_registry(self.state)
+        job = jobs.run(jobs.create(GOAL, reg)["id"], reg, retry_delay=0)
+        j = jobs.get(job["id"])  # as if the time limit had run out just before the send
+        j["waiting"] = {"step": 2, "kind": "limit", "reason": "time limit reached", "since": j["updated"]}
+        jobs._save(j)
+        jobs.approve(job["id"])  # "Continue"
+        job = jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual((job["status"], job["waiting"]["kind"]), ("waiting", "approval"))
+        self.assertEqual(calls(self.state, "send"), [])
+
     def test_cancel_and_time_limit(self):
         from libra import jobs
 
@@ -512,7 +564,10 @@ class JobsServerTest(unittest.TestCase):
         job = self.wait_for(job_id, "waiting")
         self.assertIn("approval", job["waiting"]["reason"])
         self.assertEqual(self.req("/v1/jobs")[2]["jobs"][0]["id"], job_id)
-        self.assertEqual(self.req(f"/v1/jobs/{job_id}/approve", {})[0], 200)
+        op = job["waiting"]["operation"]
+        self.assertEqual(self.req(f"/v1/jobs/{job_id}/approve", {"operation_digest": "f" * 12})[0], 409)  # stale
+        self.assertEqual(self.req(f"/v1/jobs/{job_id}/approve", {"operation_digest": 5})[0], 400)
+        self.assertEqual(self.req(f"/v1/jobs/{job_id}/approve", {"operation_digest": op["digest"]})[0], 200)
         job = self.wait_for(job_id, "done")
         self.assertTrue(job["result"]["verified"])
         self.assertEqual(job["approvals"][0]["by"], "owner")

@@ -21,7 +21,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 168 Python test functions in 25 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
+- **Tests:** 170 Python test functions in 25 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -214,7 +214,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_websocket.py`](../tests/test_websocket.py) | 3 | Frames, fragmentation, pings, close codes, bad handshakes |
 | [`test_discord.py`](../tests/test_discord.py) | 2 | A full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
 | [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
-| [`test_jobs.py`](../tests/test_jobs.py) | 16 | Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs), including across several steps; a failed read step never falls back to a change; two runners on one job; a torn event line; durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
+| [`test_jobs.py`](../tests/test_jobs.py) | 19 | Approvals bound to the exact operation (stale, changed, pre-0.16, over HTTP); continuing after a time limit doesn't approve a change; Per-goal permissions and the outside-content gate (jobs, plain and autonomous runs), including across several steps; a failed read step never falls back to a change; two runners on one job; a torn event line; durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
 | [`test_eval.py`](../tests/test_eval.py) | 3 | Planner suite scoring, likelihood scoring on a trained model, history deltas, the behaviour gate rejecting a model |
 | [`test_mobile.py`](../tests/test_mobile.py) | 4 | What the Android app relies on: the `libra://pair` link, one token in both links, the last training decision, the web app's hooks |
 | [`android/app/src/test`](../android/app/src/test/java/ai/libra/app) | 6 (JVM) | Pairing-link parsing and rejection; notification decisions (each event once, nothing on first check) |
@@ -360,7 +360,25 @@ This review read commit `1db5559`, the one pinned in [VERIFY.md](VERIFY.md). It 
 | **P1** Manipulating the planner through wording | Known (residual risk 6). The outside-content gate means wording inside fetched content can't trigger a change | — |
 | Hybrid semantic retrieval, adaptive replanning, procedural memory, broader evals | **Not done**, except that procedural memory exists (learned procedures, section 4) | Semantic retrieval would use from-scratch co-occurrence vectors trained on the user's own files; broader evals would add more suites to `libra eval` |
 
+### The 0.16 "Verified Autonomy" specification
+
+After this review came an engineering kit: a specification, a candidate patch and a helper module (`verified.py`) with five tests. Its own note says the patch wasn't applied to a checkout. Mapped against the code:
+
+| Spec item | Status |
+|---|---|
+| PR-016-A: no ambient proxies; fsync the journal | Done above. The kit's patch removed proxies entirely; Libra keeps an explicit opt-in (`LIBRA_USE_PROXY=1`) that still refuses names it can't check, which is what the spec's "explicit proxy facility" asks for |
+| T06: fail closed without locking | **Real; fixed.** `_Lock` returned success when `fcntl` was missing. Now it refuses |
+| T04 / PR-016-B: approvals bound to a digest of the concrete operation | **Built.** [`jobs.py`](../libra/jobs.py) `_operation`: SHA-256 over the job, step, skill, risk and the arguments after substitution (one call per remaining item). The app, `libra jobs show` and `/v1/jobs` show the skill, risk, redacted arguments and digest. `approve` can name the digest (409 if stale). The step records the digest it dispatched. Tests: `test_an_approval_covers_only_the_exact_operation` and the HTTP test |
+| Migration step 5: never reuse approvals that lack a digest | **Built.** They don't count; the owner confirms again |
+| Found while doing it | **Real; fixed.** A time-limit pause recorded an approval for its step, so **Continue** also let that step's change run. Test: `test_continuing_after_a_time_limit_does_not_approve_a_change` (failed before: the send ran) |
+| Storage permissions | The jobs folder is now 0700 |
+| PR-016-C: evidence verifiers (`passed`/`failed`/`unknown`), reconcile after a crash | **Not done.** An interrupted change still waits for a person; result checks are still rule-based. Needs a per-skill `verify` and `reconcile` contract |
+| PR-016-D: capabilities, isolated plugins | **Not done** (see the P1 row above) |
+| PR-016-E: failure injection beyond SIGKILL, release toggle | Not done. A toggle isn't needed for B: it's a stricter check, and old approvals fail closed |
+| `verified.py` | Not copied. Its digest and "legacy approvals don't count" rules are what `_operation`/`_approved` now do inside the job runner. Its equality verdict belongs with PR-016-C |
+
 **Residual risks**, for the next review:
+- **A digest proves what was approved, not what the skill does with it.** A skill that ignores its arguments or misdescribes its risk is still trusted as written (PR-016-D).
 - **A trusted proxy (`LIBRA_USE_PROXY=1`)** resolves the name again itself. Split-horizon DNS, where the proxy sees a different address than Libra, is the proxy's responsibility. That's why the setting exists only for proxies that enforce their own destination rules.
 - **MCP over HTTP and Discord's REST API** still use their configured URLs directly (trusted configuration).
 - **External changes aren't idempotent:** after a crash, a person decides whether an interrupted change already happened.

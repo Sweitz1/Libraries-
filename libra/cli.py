@@ -709,7 +709,7 @@ def cmd_jobs(args) -> None:
             if not items:
                 raise SystemExit(f"usage: libra jobs {a} <id>")
             if a == "approve":
-                jobs.approve(items[0], by="owner (terminal)")
+                jobs.approve(items[0], by="owner (terminal)", digest=args.digest)
             elif a == "skip":
                 jobs.skip(items[0], by="owner (terminal)")
             job = jobs.run(items[0], reg, log=lambda m: print("… " + m))
@@ -1155,6 +1155,8 @@ def build_parser() -> argparse.ArgumentParser:
     jb.add_argument("--max-items", type=int, default=5)
     jb.add_argument("--max-minutes", type=float, default=10, help="time limit per run (resume continues)")
     jb.add_argument("-n", type=int, default=20, help="list: how many")
+    jb.add_argument("--digest", help="approve: only if the job still waits on this operation (a prefix of 8+ "
+                    "characters, as `show` prints it)")
     jb.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
     _add_skill_flags(jb)
     jb.set_defaults(func=cmd_jobs)
