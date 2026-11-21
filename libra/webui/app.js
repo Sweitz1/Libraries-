@@ -358,7 +358,7 @@ async function loadAgent() {
       ` · ${j.steps_done}/${j.steps} steps · ` + (j.name || j.goal).slice(0, 70)));
     if (j.waiting && !j.running) card.append(el("p", { text: j.waiting.reason }));
     const op = j.waiting && j.waiting.operation;
-    if (op && !j.running) card.append(el("pre", { class: "muted", text: `${op.skill} (${op.risk}), ${op.count} call(s):\n` + JSON.stringify(op.calls, null, 1).slice(0, 600) }));
+    if (op && !j.running) card.append(el("pre", { class: "report muted", text: `${op.skill} (${op.risk}), ${op.count} call(s):\n` + JSON.stringify(op.calls, null, 1).slice(0, 600) }));
     const act = (action, label, cls) => el("button", { class: "btn small" + (cls ? " " + cls : ""), text: label, onclick: async () => {
       // an approval names the operation shown here; if the job changed since, the server refuses it (409)
       const body = action === "approve" && op ? { operation_digest: op.digest } : {};
