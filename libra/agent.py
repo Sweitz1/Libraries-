@@ -88,10 +88,19 @@ class Plan:
 
 # ------------------------------------------------------------------ planning
 def split_goal(goal: str) -> list[str]:
+    # quoted text is the user's payload: never split inside it ("summarize "A. B. C." then …")
+    quotes = []
+
+    def hide(m):
+        quotes.append(m.group(0))
+        return f"\x00{len(quotes) - 1}\x00"
+
+    masked = re.sub(r"\"[^\"]{1,2000}\"|“[^”]{1,2000}”|«[^»]{1,2000}»", hide, goal.strip())
     parts = []
-    for piece in SPLIT_RE.split(goal.strip()):
+    for piece in SPLIT_RE.split(masked):
         parts += [p for p in AND_ACTION_RE.split(piece) if p]
-    return [p.strip(" .,") for p in parts if p and p.strip(" .,")]
+    show = lambda p: re.sub(r"\x00(\d+)\x00", lambda m: quotes[int(m.group(1))], p)  # noqa: E731
+    return [show(p.strip(" .,")) for p in parts if p and p.strip(" .,")]
 
 
 def _lang(clause: str):
@@ -543,12 +552,23 @@ def recent_runs(n: int = 20) -> list[dict]:
 
 
 def run_goal(goal: str, registry, name: str = "", log=None, autonomous: bool = False, **limits) -> AgentRun:
+    """Run a goal. Plain goals run as durable jobs (see :mod:`libra.jobs`): they survive a restart,
+    pause for approval and finish with a checked result. Autonomous goals use the adaptive loop."""
     if autonomous:
         from .autonomy import pursue
 
         r = pursue(goal, registry, name=name, log=log, **limits)
     else:
-        r = execute(plan(goal, registry), registry, name=name, log=log, **limits)
+        from . import jobs
+
+        try:
+            job = jobs.create(goal, registry, name=name, **limits)
+        except ValueError:
+            p = plan(goal, registry)
+            r = AgentRun(goal, name, _dt.datetime.now().astimezone().isoformat(timespec="seconds"), status="invalid",
+                         problems=list(p.problems))
+        else:
+            r = jobs.to_run(jobs.run(job["id"], registry, log=log))
     record(r)
     _notify(r)
     return r
@@ -584,8 +604,20 @@ def run_due(registry, log=print) -> list[AgentRun]:
     runs = []
     try:
         os.write(fd, str(os.getpid()).encode())
+        from . import jobs
+
+        for job in jobs.resume_all(registry, log=log):  # goals that a crash or restart interrupted
+            r = jobs.to_run(job)
+            record(r)
+            _notify(r)
+            runs.append(r)
+        pending = {j["name"]: j for j in jobs.listing(500) if j["name"] and j["status"] not in jobs.FINAL}
         for name, g in sorted(load_goals().items()):
             if g.get("enabled", True) and is_due(g.get("every"), g.get("last_run")):
+                if name in pending:  # don't pile up copies of a goal that is waiting for you
+                    if log:
+                        log(f"goal {name!r} is still {pending[name]['status']} (job {pending[name]['id']})")
+                    continue
                 if log:
                     log(f"running goal {name!r}")
                 runs.append(run_goal(g["goal"], registry, name=name, autonomous=bool(g.get("autonomous"))))

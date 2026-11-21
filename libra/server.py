@@ -39,7 +39,7 @@ MAX_FAILS, FAIL_WINDOW = 10, 600
 SOCKET_TIMEOUT = 60  # seconds a client may stay silent mid-request before the connection is dropped
 MAX_CONNECTIONS, MAX_PER_ADDRESS = 64, 16
 EXPENSIVE = ("/v1/chat/completions", "/v1/completions", "/v1/translate", "/v1/workspace/ask", "/v1/skills/",
-             "/v1/agent/", "/v1/auto/run")
+             "/v1/agent/", "/v1/auto/run", "/v1/jobs")
 LIMITS = {"messages": 200, "goal": 2000, "text": 20000, "question": 4000}
 
 
@@ -50,8 +50,10 @@ class Busy(Exception):
 class Engine:
     def __init__(self, model, tokenizer, name: str = "libra", skills=None, auto_skills: bool = False,
                  workspace=None, token: str | None = None, auto_config: str | None = None,
-                 max_generations: int = 2, queue_wait: float = 30.0, rate_limit: int = 60):
+                 max_generations: int = 2, queue_wait: float = 30.0, rate_limit: int = 60, cors_origins=()):
         self.token = token or None
+        # Web pages on other origins may call the API only if listed here (the built-in app is same-origin)
+        self.cors_origins = {o.strip().rstrip("/") for o in (cors_origins or ()) if o and o.strip()}
         self.slots = threading.BoundedSemaphore(max(1, max_generations))  # generations running at once
         self.queue_wait = queue_wait
         self.rate_limit = rate_limit  # expensive requests per address per minute (0 = no limit)
@@ -63,6 +65,7 @@ class Engine:
         self.auto_thread: threading.Thread | None = None
         self.agent_thread: threading.Thread | None = None
         self.agent_current: dict = {}
+        self.job_threads: dict[str, threading.Thread] = {}
         self.auto_last: dict = {}
         self._fails: dict[str, list] = {}
         self._fails_lock = threading.Lock()
@@ -87,6 +90,36 @@ class Engine:
             hits.append(now)
             self._hits[ip] = hits
         return 0.0
+
+    def start_job(self, job_id: str) -> None:
+        """Run (or continue) a durable job in the background."""
+        from . import agent, jobs
+
+        t = self.job_threads.get(job_id)
+        if t is not None and t.is_alive():
+            return
+
+        def work():
+            try:
+                job = jobs.run(job_id, self.skills)
+            except jobs.JobError:
+                return
+            if job["status"] in jobs.FINAL or job["status"] == "waiting":
+                agent.record(jobs.to_run(job))
+
+        t = threading.Thread(target=work, daemon=True, name=f"job-{job_id}")
+        self.job_threads[job_id] = t
+        t.start()
+
+    def resume_jobs(self) -> None:
+        """At start-up: continue jobs that a crash or restart interrupted (in the background)."""
+        if self.skills is None:
+            return
+        from . import jobs
+
+        for item in jobs.listing(1000):
+            if not item["running"] and item["status"] in ("queued", "running"):
+                self.start_job(item["id"])
 
     def watch_model(self, model_dir: str) -> None:
         """Reload the model whenever a new checkpoint is published in ``model_dir`` (e.g. by nightly training)."""
@@ -197,9 +230,13 @@ def make_handler(engine: Engine):
             print(f"[server] {self.address_string()} {fmt % args}")
 
         def _cors(self):
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            origin = (self.headers.get("Origin") or "").rstrip("/")
+            if origin and (origin in engine.cors_origins or "*" in engine.cors_origins):
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Max-Age", "600")
+            self.send_header("Vary", "Origin")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
 
@@ -208,6 +245,7 @@ def make_handler(engine: Engine):
 
         def _authorized(self, path: str) -> bool:
             """True if the request may go on; otherwise an error has been sent."""
+            self.principal = "owner" if engine.token is None else "anonymous"
             if engine.token is None or path in OPEN_PATHS:
                 return True
             ip = self._client()
@@ -308,6 +346,57 @@ def make_handler(engine: Engine):
                     return
             self._json(200, {"revoked": devices.revoke(device_id)})
 
+        def _jobs_get(self, rest: str) -> None:
+            from . import jobs
+
+            try:
+                if not rest:
+                    from urllib.parse import parse_qs, urlsplit
+
+                    n = int((parse_qs(urlsplit(self.path).query).get("n") or ["30"])[0])
+                    self._json(200, {"jobs": jobs.listing(max(1, min(n, 200)))})
+                else:
+                    job = jobs.get(rest)
+                    self._json(200, dict(job, running=jobs.is_running(rest), events=jobs.events(rest)[-50:]))
+            except jobs.JobError as exc:
+                self._error(404, str(exc))
+            except ValueError:
+                self._error(400, "n must be a number")
+
+        def _jobs_post(self, rest: str, body: dict) -> None:
+            from . import jobs
+
+            if engine.skills is None:
+                self._error(404, "this server has no skills")
+                return
+            try:
+                if not rest:  # start a new job
+                    job = jobs.create(str(body.get("goal") or ""), engine.skills, name=str(body.get("name") or ""),
+                                      autonomous=bool(body.get("autonomous")))
+                    engine.start_job(job["id"])
+                    self._json(202, {"started": True, "job": job})
+                    return
+                job_id, _, action = rest.partition("/")
+                if action == "approve":
+                    job = jobs.approve(job_id, by=self.principal)
+                    engine.start_job(job_id)
+                elif action == "skip":
+                    job = jobs.skip(job_id, by=self.principal)
+                    engine.start_job(job_id)
+                elif action == "cancel":
+                    job = jobs.cancel(job_id, by=self.principal)
+                elif action == "resume":
+                    job = jobs.get(job_id)
+                    engine.start_job(job_id)
+                else:
+                    self._error(404, f"unknown job action {action!r}")
+                    return
+                self._json(200, {"job": job})
+            except jobs.JobError as exc:
+                self._error(409 if "running" in str(exc) or "not waiting" in str(exc) else 404, str(exc))
+            except ValueError as exc:
+                self._error(400, str(exc))
+
         def _agent_post(self, action: str, body: dict) -> None:
             from . import agent
 
@@ -346,20 +435,27 @@ def make_handler(engine: Engine):
                         self._json(200, {"started": False, "plan": p.to_dict()})
                         return
 
+                    job = None
+                    if not autonomous:  # plain goals run as durable jobs
+                        from . import jobs
+
+                        job = jobs.create(goal, engine.skills, name=name)
+
                     def work():
                         steps = []
-                        engine.agent_current = {"goal": goal, "name": name, "steps": steps, "autonomous": autonomous}
+                        engine.agent_current = {"goal": goal, "name": name, "steps": steps, "autonomous": autonomous,
+                                                "job": job["id"] if job else None}
                         if autonomous:
                             from .autonomy import pursue
 
                             r = pursue(goal, engine.skills, name=name, log=steps.append)
                         else:
-                            r = agent.execute(p, engine.skills, name=name, log=steps.append)
+                            r = jobs.to_run(jobs.run(job["id"], engine.skills, log=steps.append))
                         agent.record(r)
 
                     engine.agent_thread = threading.Thread(target=work, daemon=True)
                     engine.agent_thread.start()
-                    self._json(202, {"started": True, "plan": p.to_dict()})
+                    self._json(202, {"started": True, "plan": p.to_dict(), "job": job["id"] if job else None})
                 else:
                     self._error(404, f"unknown agent action {action!r}")
             except ValueError as exc:
@@ -439,6 +535,8 @@ def make_handler(engine: Engine):
                 running = bool(engine.agent_thread and engine.agent_thread.is_alive())
                 self._json(200, {"goals": agent.load_goals(), "runs": agent.recent_runs(15),
                                  "running": running, "current": engine.agent_current if running else {}})
+            elif path == "/v1/jobs" or path.startswith("/v1/jobs/"):
+                self._jobs_get(path[len("/v1/jobs"):].strip("/"))
             elif path == "/v1/pair":
                 self._error(405, "pairing creates a device token: use POST /v1/pair {\"base\": …, \"name\": …}")
             elif path == "/v1/devices":
@@ -537,6 +635,9 @@ def make_handler(engine: Engine):
                 return
             if path.startswith("/v1/agent/"):
                 self._agent_post(path[len("/v1/agent/"):], body)
+                return
+            if path == "/v1/jobs" or path.startswith("/v1/jobs/"):
+                self._jobs_post(path[len("/v1/jobs"):].strip("/"), body)
                 return
             if path == "/v1/pair":
                 self._pair(body)
@@ -720,7 +821,7 @@ def _validate(path: str, body: dict) -> str | None:
         msgs = body.get("messages")
         if isinstance(msgs, list) and len(msgs) > LIMITS["messages"]:
             return f"too many messages (at most {LIMITS['messages']})"
-    if path.startswith("/v1/agent/") and len(str(body.get("goal") or "")) > LIMITS["goal"]:
+    if (path.startswith("/v1/agent/") or path == "/v1/jobs") and len(str(body.get("goal") or "")) > LIMITS["goal"]:
         return f"goal too long (at most {LIMITS['goal']} characters)"
     if path == "/v1/translate" and len(str(body.get("text") or "")) > LIMITS["text"]:
         return f"text too long (at most {LIMITS['text']} characters)"

@@ -25,6 +25,12 @@ libra memory add "the backup runs at 3am"
 libra memory search backup
 libra agent auto "what is (2+3)*4"
 libra agent procedures
+# durable jobs: a checked result, a listing, the event log
+libra jobs start 'summarize "Jobs are saved after every step. They resume after a restart. Changes wait for approval. Results are checked." in 2 sentences'
+libra jobs list > "$work/jobs.txt"
+grep " done " "$work/jobs.txt"
+libra jobs show "$(awk 'NR==1{print $1}' "$work/jobs.txt")" --events > "$work/job.txt"
+grep "finished" "$work/job.txt"
 libra discord config
 libra devices add "ci laptop"
 libra devices list

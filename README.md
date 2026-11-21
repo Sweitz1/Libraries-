@@ -261,12 +261,35 @@ The app's **Agent** tab does the same: preview a plan, run it, save and schedule
 
 **How it runs.** Every step goes through the trust controls, like any other skill:
 - Read-only skills run.
-- Skills that change something ask first in the terminal. In scheduled runs and in the app, nobody can be asked, so they're refused with the exact `libra trust allow …` command.
+- Skills that change something ask first in the terminal. Scheduled goals and goals started from the app run as **durable jobs** (below): a step that needs approval pauses the job until you approve it, from the app or with `libra jobs approve`.
 - Runs stop at `--max-steps` (10) and `--max-minutes` (5).
 
 Schedules: `hourly`, `daily`, `weekly`, `30m`, `6h`, `daily@07:00`, `weekdays@08:30` or `weekly@09:00`. The Debian service checks for due goals every 5 minutes. Elsewhere, run `libra agent run-due` from cron.
 
 New built-in skill: **`summarize`** keeps the sentences that best cover a text's main words, quoted exactly, in their original order.
+
+### Durable jobs: goals that survive restarts and end with a checked result
+
+```bash
+libra jobs start "list the links on https://example.com/blog then scrape each of them then summarize it in 5 sentences"
+libra jobs list                  # every job: done, waiting, failed, cancelled …
+libra jobs show <id> --events    # steps, dependencies, checks, and the full event log
+libra jobs approve <id>          # let the step that is waiting run (once)
+libra jobs skip <id>             # or skip it
+libra jobs resume                # carry on with interrupted jobs (the server and the timer do this too)
+libra jobs cancel <id>
+```
+
+Scheduled goals, and plain goals started from the app, run as jobs. The app's **Agent** tab lists them, with **Approve**, **Skip step** and **Cancel** buttons. Over HTTP: `POST /v1/jobs {"goal": …}`, `GET /v1/jobs`, `GET /v1/jobs/<id>`, `POST /v1/jobs/<id>/approve|skip|cancel|resume`.
+
+- **Saved as it goes.** The job file is replaced atomically before and after every step, and after every item of an "each of them" step. A crash, a reboot or `kill -9` loses at most the step in progress.
+- **Resumes without redoing work.** Finished steps and finished items are kept. The server resumes interrupted jobs when it starts, and the agent timer does too.
+- **Safe after an interruption.** A read-only step that was cut off simply runs again. A step that *changes* something might already have taken effect, so it is never re-run on its own: the job waits for you to check, then **Run it again** (approve) or **Skip**.
+- **Explicit dependencies.** A step depends on the step whose output it uses, and steps that change something keep the order you wrote. If a step fails, the steps that depend on it are skipped, and independent steps still run.
+- **Bounded retries.** Read-only steps are retried after temporary errors, up to 3 attempts with growing delays, then up to two alternative read-only skills are tried. Steps that change something are never retried automatically.
+- **Approval checkpoints.** A step that needs approval pauses the job. The pause survives restarts, and one approval covers that one step, once. Deny rules still win.
+- **A checked result.** Each step must produce something. The final output is checked against the goal's wording (sentence count, quoted words, target language). The job ends as `done` (all checks passed), `needs_review` (a check failed), `failed` or `cancelled`. The result records each check and a SHA-256 of the output.
+- **One runner at a time.** An OS lock ensures this, and the lock is released automatically if the process dies. That is also how an interrupted job is recognised.
 
 ### Autonomous mode (plan → act → check → adjust)
 

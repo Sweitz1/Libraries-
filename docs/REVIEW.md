@@ -19,7 +19,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 123 test functions in 20 files under [`tests/`](../tests).
+- **Tests:** 133 test functions in 21 files under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)
@@ -157,6 +157,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
   9. remembers the outcome
 
   [`autonomy.py`](../libra/autonomy.py)
+- **Durable jobs** (`libra jobs`, `/v1/jobs`): plans with explicit step dependencies, saved atomically before and after every step and item; resumed after a crash or restart without redoing finished work; interrupted steps that change something wait for the owner instead of re-running; approval checkpoints that survive restarts and are used once; bounded retries for read-only steps only; a final result with per-check outcomes and a SHA-256; one runner per job via an OS lock. Scheduled goals and plain goals from the app run this way. [`jobs.py`](../libra/jobs.py)
 - **Memory:** persistent facts, preferences and goal outcomes. BM25 recall with recency and usage bonuses, and near-duplicate merging. [`memory.py`](../libra/memory.py)
 
 ### Unattended training (`libra auto`)
@@ -175,7 +176,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 
 | Boundary | Protection | Where |
 |---|---|---|
-| Network access to the server | Bearer token (auto-created for network binds), lockout, 2 MB body limit, CSP and security headers; Tailscale or an HTTPS proxy recommended instead of open ports | [`server.py`](../libra/server.py), [`cli.py`](../libra/cli.py) `_server_token` |
+| Network access to the server | Bearer token (auto-created for network binds), lockout, 2 MB body limit, CSP and security headers; no CORS unless an origin is listed with `--cors-origin` (the built-in app is same-origin); Tailscale or an HTTPS proxy recommended instead of open ports | [`server.py`](../libra/server.py), [`cli.py`](../libra/cli.py) `_server_token` |
 | SSRF through web skills, crawler, OpenAPI and notifications | Any non-global address is refused: private, loopback, link-local, CGNAT/Tailscale `100.64/10`, multicast, reserved, `0.0.0.0`, and IPv4-mapped IPv6. **The connection goes to the address that was checked:** it resolves once and connects to that address, for pages, robots.txt and every redirect hop, so DNS rebinding can't redirect it. `--allow-private` turns this off | [`web.py`](../libra/web.py) `_safe_connect`, `_PinnedHTTP(S)Connection`, `Fetcher._open` |
 | Skills that change things | Trust policy: ask or deny by risk, source or skill. **A deny from any applicable rule wins** over a more specific allow and over `--yes`. Refused when nobody can be asked. Audit log with recursive redaction | [`trust.py`](../libra/trust.py) `Policy.decide`, `redact`; `SkillRegistry.run` in [`skills.py`](../libra/skills.py) |
 | Plugins and MCP servers | Run arbitrary code with the user's permissions; documented, and only loaded explicitly (or from `~/.libra/plugins`) | [`skills.py`](../libra/skills.py) `load_plugins`, [`mcp.py`](../libra/mcp.py) |
@@ -206,6 +207,7 @@ Installer options: `--port --host --local-only --tailscale --tailscale-only --ts
 | [`test_websocket.py`](../tests/test_websocket.py) | 3 | Frames, fragmentation, pings, close codes, bad handshakes |
 | [`test_discord.py`](../tests/test_discord.py) | 2 | A full bot session against a fake gateway and REST: identify, heartbeat, resume, 429 retry, allow list, memory, goals, fatal close |
 | [`test_ssrf.py`](../tests/test_ssrf.py), [`test_hardening.py`](../tests/test_hardening.py) | — | Fixes from the first external review (section 9) |
+| [`test_jobs.py`](../tests/test_jobs.py) | 10 | Durable jobs: SIGKILL mid-step then resume without redoing work; an interrupted change waits for approval; approvals across restarts; retries, dependencies, cancel, time limit, schedules; HTTP flow; CORS |
 | [`test_isolation.py`](../tests/test_isolation.py) | 6 | Fixes from the second review (section 10): per-thread gradients, atomic checkpoints, honest validation |
 
 The end-to-end CLI checks are in [`.github/smoke.sh`](../.github/smoke.sh), and CI is defined in [`.github/workflows/test.yml`](../.github/workflows/test.yml). The phone app was also exercised by hand with Playwright (iPhone 13 profile): login, chat, translate, skills, agent, autonomous mode, training progress, pairing (the on-screen QR code decoded with OpenCV), dark mode, no horizontal overflow and no console errors.
@@ -287,3 +289,22 @@ The second review looked at commit `2bd1928`. All three findings were confirmed.
 | 3 | With too little text for a holdout, training loss was reported as `val_loss` and used to choose `best/` | Without a real holdout the log says "train loss (no held-out split)", the metadata stores `train_loss` with `val_loss: null`, and no `best/` checkpoint is chosen | `test_no_holdout_reports_training_loss` |
 
 **Residual risks:** the separate training process and the server share the checkpoint folder, which is now safe for readers, but two trainers writing the same folder at once would still race (`libra auto` already holds a lock file for that). The chat CLI and `libra train` itself still run in one process, as before.
+
+## 11. Response to the third review (roadmap)
+
+The third review was a broader assessment with a roadmap rather than a list of bugs. Its points were checked against the current code (`d941fa3`):
+
+| Point | Status |
+|---|---|
+| Wildcard CORS headers | **Fixed.** No `Access-Control-Allow-*` headers unless the request's origin is listed with `--cors-origin` or `LIBRA_CORS_ORIGINS`. The built-in app is same-origin, and Nexus Agent doesn't call Libra from a web view, so nothing needed it. Test: `test_cors_only_for_configured_origins` |
+| DNS rebinding | Already fixed in the first review round (section 9) |
+| Token in `localStorage` and pairing | Already mitigated in the first round: per-device, hashed, revocable tokens, and links never carry the main token. Script in the app's origin could still read the device token (CSP `script-src 'self'` limits that) |
+| Concurrent inference, reloads, schedules and training | Covered in the first two rounds: generation slots, atomic checkpoints with reload on pointer change, per-thread gradients, and training in a separate process |
+| Real-world deployment (GPU, Debian/systemd, Tailscale, Discord, phones) | **Still unverified.** This needs real hardware and accounts; see "Not verified" in section 6 |
+| "Build a reliable goal-execution engine: durable record, explicit dependencies, success checks, bounded retries, resumable, approval checkpoints" | **Built:** [`jobs.py`](../libra/jobs.py), `libra jobs`, `/v1/jobs`, and a Jobs panel in the app. See section 4, Agents |
+| "Demonstrate a multi-step task that recovers from an interruption and produces a verifiable result" | **Demonstrated in tests, with a real `SIGKILL`:** `test_hard_kill_mid_step_resumes_without_redoing_work` kills the process halfway through step 2 (collect, digest each of 3 sources, send a report). On resume, nothing finished is redone, the report goes out exactly once with all three digests, and the result is checked and hashed. `test_interrupted_change_is_not_rerun_without_approval` kills it inside the "send" step: the job will not send again until the owner approves |
+| Model quality and benchmarks | Not started. The model is small (about 1M–5M parameters) by design; the review's advice to measure before scaling is noted |
+
+Also found while testing: the goal splitter broke sentences apart *inside quoted text* (`summarize "A. B. C." …`). Fixed; quoted text is now kept whole.
+
+**Residual limits:** jobs run steps one at a time (dependencies decide what is skipped, not what runs in parallel). Autonomous-mode goals (`--auto`) still use the adaptive loop, which is not durable. Checks are rule-based and read from the goal's wording.

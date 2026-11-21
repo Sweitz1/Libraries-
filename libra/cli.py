@@ -257,8 +257,10 @@ def cmd_serve(args) -> None:
     if auto_config and not os.path.exists(auto_config):
         raise SystemExit(f"no auto config at {auto_config} (create one with: libra auto init {args.auto_config})")
     engine = Engine(model, tok, name=args.name, skills=skills, auto_skills=args.auto_skills, workspace=ws,
-                    token=token, auto_config=auto_config)
+                    token=token, auto_config=auto_config,
+                    cors_origins=(args.cors_origin or []) + os.environ.get("LIBRA_CORS_ORIGINS", "").split(","))
     engine.watch_model(os.path.abspath(args.model))  # new training results are picked up without a restart
+    engine.resume_jobs()  # goals interrupted by a crash or restart carry on
     serve(engine, args.host, args.port)
 
 
@@ -658,6 +660,70 @@ def cmd_agent(args) -> None:
             print(f"{r.name}: {r.status}")
 
 
+def cmd_jobs(args) -> None:
+    from . import agent, jobs
+
+    a, items = args.action, args.items
+    show = lambda job: print(jobs.describe(job))  # noqa: E731
+    try:
+        if a == "start":
+            goal = " ".join(items)
+            if not goal:
+                raise SystemExit('usage: libra jobs start "your goal"')
+            reg = _registry(args)
+            job = jobs.create(goal, reg, name=args.name or "", autonomous=args.auto, max_steps=args.max_steps,
+                              max_items=args.max_items, max_seconds=args.max_minutes * 60)
+            print(f"job {job['id']}")
+            job = jobs.run(job["id"], reg, log=lambda m: print("… " + m))
+            agent.record(jobs.to_run(job))
+            print()
+            show(job)
+            if job["status"] not in ("done", "waiting"):
+                raise SystemExit(1)
+        elif a == "list":
+            rows = jobs.listing(args.n)
+            if not rows:
+                print('no jobs yet (libra jobs start "your goal")')
+            for j in rows:
+                state = "running" if j["running"] else j["status"]
+                print(f"  {j['id']}  {state:<12} {j['steps_done']}/{j['steps']}  {(j['name'] or '-'):<10} "
+                      f"{j['goal'][:60]}")
+        elif a == "show":
+            if not items:
+                raise SystemExit("usage: libra jobs show <id>")
+            show(jobs.get(items[0]))
+            if args.events:
+                for e in jobs.events(items[0]):
+                    extra = {k: v for k, v in e.items() if k not in ("at", "event")}
+                    print(f"  {e['at']}  {e['event']}  {json.dumps(extra, ensure_ascii=False) if extra else ''}")
+        elif a in ("resume", "approve", "skip"):
+            reg = _registry(args)
+            if a == "resume" and not items:
+                for job in jobs.resume_all(reg, log=lambda m: print("… " + m)):
+                    agent.record(jobs.to_run(job))
+                    print(f"{job['id']}: {job['status']}")
+                return
+            if not items:
+                raise SystemExit(f"usage: libra jobs {a} <id>")
+            if a == "approve":
+                jobs.approve(items[0], by="owner (terminal)")
+            elif a == "skip":
+                jobs.skip(items[0], by="owner (terminal)")
+            job = jobs.run(items[0], reg, log=lambda m: print("… " + m))
+            agent.record(jobs.to_run(job))
+            show(job)
+        elif a == "cancel":
+            if not items:
+                raise SystemExit("usage: libra jobs cancel <id>")
+            job = jobs.cancel(items[0], by="owner (terminal)")
+            print(f"{job['id']}: {job['status']}" + ("" if job["status"] == "cancelled" else
+                                                       " (it stops at its next step)"))
+    except jobs.JobError as exc:
+        raise SystemExit(str(exc))
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
+
 def cmd_discord(args) -> None:
     from . import discord, home
 
@@ -934,6 +1000,8 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="phone/browser app plus OpenAI-compatible API")
     s.add_argument("--model", default="checkpoints/model")
     s.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to allow phones on your Wi-Fi")
+    s.add_argument("--cors-origin", action="append", metavar="URL",
+                   help="let a web page on this origin call the API (repeatable; the built-in app doesn't need it)")
     s.add_argument("--token", help="access token (default for network hosts: one saved in ~/.libra/server-token)")
     s.add_argument("--token-file", help="read the access token from this file (created if missing)")
     s.add_argument("--no-auth", action="store_true", help="no token at all (only for trusted, local use)")
@@ -1028,6 +1096,20 @@ def build_parser() -> argparse.ArgumentParser:
     ag.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
     _add_skill_flags(ag)
     ag.set_defaults(func=cmd_agent)
+
+    jb = sub.add_parser("jobs", help="durable goals: survive restarts, pause for approval, end with a checked result")
+    jb.add_argument("action", choices=["start", "list", "show", "resume", "approve", "skip", "cancel"])
+    jb.add_argument("items", nargs="*", help="start: the goal; others: a job id (resume without one: all)")
+    jb.add_argument("--name", help="start: a label for the job")
+    jb.add_argument("--auto", action="store_true", help="start: repair the plan with weaker read-only matches")
+    jb.add_argument("--events", action="store_true", help="show: also print the job's event log")
+    jb.add_argument("--max-steps", type=int, default=12)
+    jb.add_argument("--max-items", type=int, default=5)
+    jb.add_argument("--max-minutes", type=float, default=10, help="time limit per run (resume continues)")
+    jb.add_argument("-n", type=int, default=20, help="list: how many")
+    jb.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
+    _add_skill_flags(jb)
+    jb.set_defaults(func=cmd_jobs)
 
     dc = sub.add_parser("discord", help="run Libra as a Discord bot (server channels and direct messages)")
     dc.add_argument("action", choices=["setup", "check", "allow", "disallow", "set", "config", "send", "run"])

@@ -337,6 +337,40 @@ async function loadAgent() {
         if (confirm(`Delete the goal “${name}”?`)) { await json("/v1/agent/remove", { name }); loadAgent(); } } }), el("span"));
     card.append(row); goals.append(card);
   }
+  const jobsBox = $("ag-jobs"); jobsBox.textContent = "";
+  let jobs = [];
+  try { jobs = (await json("/v1/jobs?n=10")).jobs; } catch (e) { jobsBox.append(el("p", { class: "muted", text: "Jobs: " + e.message })); }
+  if (!jobs.length) jobsBox.append(el("p", { class: "muted", text: "No jobs yet." }));
+  for (const j of jobs) {
+    const state = j.running ? "running" : j.status;
+    const card = el("div", { class: "card" }, el("strong", {}, el("span", { class: "status-" + state, text: state }),
+      ` · ${j.steps_done}/${j.steps} steps · ` + (j.name || j.goal).slice(0, 70)));
+    if (j.waiting && !j.running) card.append(el("p", { text: j.waiting.reason }));
+    const act = (action, label, cls) => el("button", { class: "btn small" + (cls ? " " + cls : ""), text: label, onclick: async () => {
+      try { await json(`/v1/jobs/${j.id}/${action}`, {}); } catch (e) { alert(e.message); }
+      setTimeout(loadAgent, 400);
+    } });
+    const row = el("div", { class: "row" });
+    if (j.status === "waiting" && !j.running) {
+      row.append(act("approve", j.waiting.kind === "limit" ? "Continue" : j.waiting.kind === "interrupted" ? "Run it again" : "Approve"));
+      if (j.waiting.kind !== "limit") row.append(act("skip", "Skip step", "secondary"));
+    }
+    if (!["done", "failed", "cancelled", "needs_review"].includes(j.status)) row.append(act("cancel", "Cancel", "secondary"));
+    row.append(el("button", { class: "btn small secondary", text: "Details", onclick: async () => {
+      try {
+        const full = await json(`/v1/jobs/${j.id}`);
+        const lines = full.steps.map((s) => `${{ done: "✓", failed: "✗", skipped: "–", running: "…" }[s.status] || "·"} ${s.n + 1}. ${s.skill}` +
+          (s.needs.length ? ` (after ${s.needs.map((n) => n + 1).join(", ")})` : "") + `: ${s.clause}` + (s.error ? `\n     ${s.error.slice(0, 160)}` : ""));
+        if (full.result) {
+          for (const c of full.result.checks) lines.push(`${c.ok ? "✓" : "✗"} check: ${c.check}`);
+          lines.push(`result ${full.result.verified ? "verified" : "not verified"} · sha256 ${full.result.sha256.slice(0, 16)}…`, "", full.result.output);
+        }
+        $("ag-out").textContent = lines.join("\n");
+      } catch (e) { $("ag-out").textContent = "Error: " + e.message; }
+    } }));
+    card.append(row); jobsBox.append(card);
+  }
+  const jobBusy = jobs.some((j) => j.running);
   const runs = $("ag-runs"); runs.textContent = "";
   if (r.running) runs.append(el("div", { class: "card" }, el("strong", { text: "Running: " + (r.current.name || r.current.goal || "") }),
     el("pre", { class: "report", text: (r.current.steps || []).join("\n") || "starting…" })));
@@ -355,7 +389,7 @@ async function loadAgent() {
   }
   if (agentWasRunning && !r.running && r.runs[0]) notifyDevice("Goal finished: " + (r.runs[0].name || "agent"), r.runs[0].status);
   agentWasRunning = r.running;
-  if (r.running) agentTimer = setTimeout(loadAgent, 2500);
+  if (r.running || jobBusy) agentTimer = setTimeout(loadAgent, 2500);
 }
 
 // ----------------------------------------------------------------- pair

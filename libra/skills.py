@@ -203,8 +203,11 @@ class SkillRegistry:
     def __contains__(self, name: str) -> bool:
         return name in self._skills or self._from_catalog(name) is not None
 
-    def check(self, s: Skill, args: dict) -> tuple[bool, str]:
-        """Apply the trust policy. Returns (allowed, decision or explanation)."""
+    def check(self, s: Skill, args: dict, approved: bool = False) -> tuple[bool, str]:
+        """Apply the trust policy. Returns (allowed, decision or explanation).
+
+        ``approved`` is an approval already given for this one call (e.g. a job step the owner
+        approved). It answers "ask"; it never overrides "deny"."""
         if self.policy is None:
             return True, "allow"
         decision, reason = self.policy.decide(s.name, s.risk)
@@ -212,7 +215,7 @@ class SkillRegistry:
             return True, "allow"
         if decision == "deny":
             return False, (f"'{s.name}' is blocked ({reason}). To allow it: libra trust allow {s.name}")
-        if self.confirm is not None and self.confirm(s, args):
+        if approved or (self.confirm is not None and self.confirm(s, args)):
             return True, "approved"
         return False, (f"'{s.name}' is a {s.risk} skill and needs your approval ({reason}). "
                        f"Approve it when asked in chat, or allow it: libra trust allow {s.name}")
@@ -220,7 +223,7 @@ class SkillRegistry:
     def list(self) -> list[Skill]:
         return [self._skills[k] for k in sorted(self._skills)]
 
-    def run(self, name: str, args: dict | None = None) -> SkillResult:
+    def run(self, name: str, args: dict | None = None, approved: bool = False) -> SkillResult:
         decision, s = "allow", None
         try:
             s = self.get(name)
@@ -236,7 +239,7 @@ class SkillRegistry:
                         raise TypeError(f"{name} has no parameter {key!r}; it takes {', '.join(sig.parameters)}")
                     kwargs[key] = _coerce(value, sig.parameters[key].annotation)
                 sig.bind(**kwargs)  # report missing arguments clearly
-            allowed, decision = self.check(s, kwargs)
+            allowed, decision = self.check(s, kwargs, approved)
             if not allowed:
                 self._audit(s, kwargs, "deny", None)
                 return SkillResult(name, False, decision)

@@ -107,7 +107,8 @@
   .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
   h3 { font-size: 15px; color: var(--muted); margin: 20px 4px 8px; }
   details summary { cursor: pointer; }
-  .status-done { color: var(--accent); } .status-blocked, .status-stopped, .status-invalid, .status-timeout { color: var(--danger); }
+  .status-done { color: var(--accent); } .status-blocked, .status-stopped, .status-invalid, .status-timeout, .status-failed { color: var(--danger); }
+  .status-waiting, .status-needs_review { color: #b7791f; }
 </style>
 </head>
 <body>
@@ -207,6 +208,9 @@
     </div>
     <h3>Saved goals</h3>
     <div id="ag-goals"></div>
+    <h3>Jobs</h3>
+    <p class="muted">Goals are kept step by step, so they carry on after a restart. A step that changes something waits here for you.</p>
+    <div id="ag-jobs"></div>
     <h3>Recent runs</h3>
     <div id="ag-runs"></div>
   </section>
