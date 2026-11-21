@@ -24,6 +24,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 - **`libra eval kb`** measures answers from your files on your own question suite: right (quoting the expected passage), wrong (answered from elsewhere), and refused (questions your files can't answer). It ships with a suite for Libra's own docs.
 
+- **Autonomous goals run as durable jobs**, and those jobs adjust their own plan when the result misses the goal's wording (at most twice, read-only skills within the goal's permissions), then learn the plan that worked. Saved autonomous goals and the app's Autonomous button now survive restarts, pause for approval, and keep to their permissions and pre-approvals. Before, a pre-approved change stopped them.
+
 ### Fixed
 - A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
 - A sign-in link opened in a tab that already showed the app was ignored (only the `#fragment` changed).

@@ -615,22 +615,19 @@ def goal_permissions(name: str) -> dict | None:
 
 
 def run_goal(goal: str, registry, name: str = "", log=None, autonomous: bool = False, **limits) -> AgentRun:
-    """Run a goal. Plain goals run as durable jobs (see :mod:`libra.jobs`): they survive a restart,
-    pause for approval and finish with a checked result. Autonomous goals use the adaptive loop."""
-    if autonomous:
-        from .autonomy import pursue
+    """Run a goal as a durable job (see :mod:`libra.jobs`): it survives a restart, pauses for approval, keeps
+    to the saved goal's permissions and finishes with a checked result. An autonomous goal also repairs a
+    weak plan, adjusts it to meet the goal and learns the plan that worked."""
+    from . import jobs
 
-        r = pursue(goal, registry, name=name, log=log, **limits)
+    try:
+        job = jobs.create(goal, registry, name=name, autonomous=autonomous, permissions=goal_permissions(name),
+                          **limits)
+    except ValueError as exc:
+        r = AgentRun(goal, name, _dt.datetime.now().astimezone().isoformat(timespec="seconds"), status="invalid",
+                     problems=[str(exc)])
     else:
-        from . import jobs
-
-        try:
-            job = jobs.create(goal, registry, name=name, permissions=goal_permissions(name), **limits)
-        except ValueError as exc:
-            r = AgentRun(goal, name, _dt.datetime.now().astimezone().isoformat(timespec="seconds"), status="invalid",
-                         problems=[str(exc)])
-        else:
-            r = jobs.to_run(jobs.run(job["id"], registry, log=log))
+        r = jobs.to_run(jobs.run(job["id"], registry, log=log))
     record(r)
     _notify(r)
     return r
