@@ -20,6 +20,10 @@ Libra runs on your own machine and network, so the boundaries that matter are:
 
 Not in scope: plugins and MCP servers you install yourself (they run with your permissions by design), running with `--no-auth` or `--allow-private`, and anyone who already has your token.
 
+## Automated checks
+
+Every push runs [Stingward](https://github.com/HiveControlAgents/StingWard) in CI (`.github/workflows/test.yml`, job `stingward`). It checks the dependency against known vulnerabilities, and the code for secrets, injection, SSRF, and agent and MCP settings. It also audits every Claude Code skill in `.claude/skills/` for hidden instructions, credential theft and risky commands. The job fails on a high or critical finding (medium, for skills). Libra currently scans with no findings (grade A). A clean scan finds the common mistakes; it isn't a penetration test.
+
 ## Status
 
 Libra has been through four external code reviews, answered point by point in [docs/REVIEW.md](docs/REVIEW.md) (sections 9–12). It has **not** had a professional security audit, and a real deployment on Debian with Tailscale, and the Android app on a device, are still unverified. Prefer the Tailscale (`https`) address over open ports.

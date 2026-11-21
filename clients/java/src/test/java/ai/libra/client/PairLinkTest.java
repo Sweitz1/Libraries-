@@ -39,7 +39,7 @@ public class PairLinkTest {
     @Test
     public void rejectsWhatIsNotASignIn() {
         for (String bad : new String[] {"", "ftp://x.example", "libra://other?base=x", "libra://pair?token=dev_12345678",
-                "http://user:pw@x.example", "javascript:alert(1)"}) {
+                "http://user:pw@x.example", "javascript:alert(1)"}) {  // stingward:ignore (test input that must be rejected, not a credential)
             try {
                 PairLink.parse(bad, null);
                 fail("accepted " + bad);
