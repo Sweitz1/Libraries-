@@ -57,6 +57,66 @@ class VerifyScriptTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
 
 
+class LibraDataScriptsTest(unittest.TestCase):
+    validate = os.path.join(SKILLS, "libra-data", "scripts", "validate.sh")
+    process = os.path.join(SKILLS, "libra-data", "scripts", "process.py")
+
+    def lines(self, r):
+        return [json.loads(l) for l in r.stdout.splitlines()]
+
+    def test_validate_accepts_libras_own_files(self):
+        files = ["templates/auto.json", "libra/evals/planner.jsonl", "libra/evals/english_basics.jsonl",
+                 "templates/eval-suite.jsonl", "plugins/example_tools.py", "templates/plugin.py"]
+        r = run("bash", self.validate, *files)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.lines(r)[-1]["summary"], {"valid": len(files), "invalid": 0})
+        self.assertIn("example.com", " ".join(self.lines(r)[0]["warnings"]))  # the template's placeholders
+
+    def test_validate_explains_problems(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = os.path.join(d, "auto.json")
+            with open(cfg, "w") as f:
+                json.dump({"sources": [{"crawl": "ftp://x"}], "gate": {"eval_sute": "x"}, "stesp_per_run": 1}, f)
+            plugin = os.path.join(d, "p.py")
+            with open(plugin, "w") as f:
+                f.write("from libra.skills import skill\n@skill('x', 'd', risk='maybe')\ndef x():\n    return 1\n")
+            trust = os.path.join(d, "trust.json")
+            with open(trust, "w") as f:
+                json.dump({"rules": {"scrape": "yes"}}, f)
+            r = run("bash", self.validate, cfg, plugin, trust)
+            self.assertEqual(r.returncode, 1)
+            a, p, t = self.lines(r)[:3]
+            self.assertIn("crawl must be an http(s) address", " ".join(a["problems"]))
+            self.assertTrue(any("eval_sute" in w for w in a["warnings"]))
+            self.assertTrue(any("stesp_per_run" in w for w in a["warnings"]))
+            self.assertIn("risk must be one of", " ".join(p["problems"]))
+            self.assertIn("'yes' isn't one of allow, ask, deny", " ".join(t["problems"]))
+        self.assertEqual(run("bash", self.validate).returncode, 2)
+        self.assertEqual(run("bash", self.validate, "no-such-file.json").returncode, 3)
+
+    def test_process_counts_writes_and_repeats(self):
+        r = run(sys.executable, self.process, "--dry-run", "data")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        stats = json.loads(r.stdout)
+        self.assertFalse(stats["written"])
+        self.assertGreater(stats["conversations"], 0)
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "ds")
+            self.assertEqual(run(sys.executable, self.process, "--out", out, "data").returncode, 0)
+            first = open(os.path.join(out, "chat.jsonl")).read()
+            run(sys.executable, self.process, "--out", out, "data")
+            self.assertEqual(open(os.path.join(out, "chat.jsonl")).read(), first)  # idempotent
+            empty = os.path.join(d, "empty")
+            os.makedirs(empty)
+            with open(os.path.join(empty, "a.txt"), "w") as f:
+                f.write("hi")
+            self.assertEqual(run(sys.executable, self.process, "--dry-run", empty).returncode, 1)
+        r = run(sys.executable, self.process, "data")  # no --out and no --dry-run: an error, never a prompt
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("Usage:", r.stderr)
+        self.assertEqual(run(sys.executable, self.process, "--dry-run", "no-such-folder").returncode, 3)
+
+
 class ReleaseScriptTest(unittest.TestCase):
     def test_missing_or_bad_version_explains_itself(self):
         script = os.path.join(ROOT, "scripts", "release.sh")
