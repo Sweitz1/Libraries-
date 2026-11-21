@@ -417,15 +417,19 @@ def make_handler(engine: Engine):
                 if not rest:
                     from urllib.parse import parse_qs, urlsplit
 
-                    n = int((parse_qs(urlsplit(self.path).query).get("n") or ["30"])[0])
+                    try:
+                        n = int((parse_qs(urlsplit(self.path).query).get("n") or ["30"])[0])
+                    except ValueError:
+                        self._error(400, "n must be a number")
+                        return
                     self._json(200, {"jobs": jobs.listing(max(1, min(n, 200)))})
                 else:
                     job = jobs.get(rest)
                     self._json(200, dict(job, running=jobs.is_running(rest), events=jobs.events(rest)[-50:]))
+            except jobs.DamagedJob as exc:
+                self._error(500, str(exc))
             except jobs.JobError as exc:
                 self._error(404, str(exc))
-            except ValueError:
-                self._error(400, "n must be a number")
 
         def _jobs_post(self, rest: str, body: dict) -> None:
             from . import jobs
@@ -459,6 +463,8 @@ def make_handler(engine: Engine):
                     self._error(404, f"unknown job action {action!r}")
                     return
                 self._json(200, {"job": job})
+            except jobs.DamagedJob as exc:
+                self._error(500, str(exc))
             except jobs.JobError as exc:
                 self._error(409 if any(w in str(exc) for w in ("running", "not waiting", "locking")) else 404, str(exc))
             except ValueError as exc:

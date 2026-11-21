@@ -57,6 +57,10 @@ class JobError(Exception):
     pass
 
 
+class DamagedJob(JobError):
+    """The job's file can't be read (disk damage, or edited by hand). Nothing will run it."""
+
+
 def _now() -> str:
     return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -106,11 +110,20 @@ def _event(job: dict, what: str, **details) -> None:
 
 
 def get(job_id: str) -> dict:
+    path = os.path.join(_dir(job_id), "job.json")
     try:
-        with open(os.path.join(_dir(job_id), "job.json"), encoding="utf-8") as f:
-            return json.load(f)
+        with open(path, encoding="utf-8") as f:
+            job = json.load(f)
     except FileNotFoundError:
         raise JobError(f"no job {job_id}") from None
+    except ValueError as exc:
+        raise DamagedJob(f"job {job_id} can't be read ({exc}), so nothing will run it. Look at {path}, "
+                         "or delete its folder to remove it") from None
+    if not (isinstance(job, dict) and isinstance(job.get("steps"), list) and job.get("id") == job_id
+            and isinstance(job.get("status"), str)):
+        raise DamagedJob(f"job {job_id} isn't a valid job file, so nothing will run it. Look at {path}, "
+                         "or delete its folder to remove it")
+    return job
 
 
 def events(job_id: str) -> list[dict]:
@@ -135,7 +148,14 @@ def listing(n: int = 20) -> list[dict]:
     for name in sorted(os.listdir(_root()), reverse=True):
         try:
             job = get(name)
-        except (JobError, ValueError, OSError):
+        except DamagedJob as exc:  # shown, not hidden: a person needs to know it's there
+            out.append({"id": name, "name": "", "goal": "(this job's file can't be read)", "status": "damaged",
+                        "created": None, "updated": None, "waiting": None, "running": False, "steps_done": 0,
+                        "steps": 0, "error": str(exc)})
+            if len(out) >= n:
+                break
+            continue
+        except (JobError, OSError):
             continue
         out.append({k: job.get(k) for k in ("id", "name", "goal", "status", "created", "updated", "waiting")}
                    | {"running": is_running(name),
@@ -791,7 +811,7 @@ def resume_all(registry, log=None, retry_delay: float = 2.0) -> list[dict]:
     unless they were approved."""
     out = []
     for item in reversed(listing(1000)):
-        if item["running"] or item["status"] in FINAL:
+        if item["running"] or item["status"] in FINAL or item["status"] == "damaged":
             continue
         job = get(item["id"])
         if job["status"] == "waiting" and not any(a["step"] == job["waiting"]["step"] and not a.get("used")
