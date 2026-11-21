@@ -28,6 +28,7 @@ import operator
 import os
 import re
 import shlex
+import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -51,6 +52,9 @@ class Skill:
     risk: str = "read"  # read, write or danger (see libra.trust)
     input_schema: dict | None = None  # JSON schema for catalog skills (MCP tools, API operations)
     external: bool | None = None  # returns outside content (web pages, other services)? None: decide by kind
+    # For skills that change something (see libra.jobs). Both are read-only checks, never another change:
+    verify: Callable | None = None  # (args, SkillResult) -> True / False / None (can't tell): did it take effect?
+    reconcile: Callable | None = None  # (args) -> True / False / None: after a crash, had it already happened?
 
     @property
     def untrusted_output(self) -> bool:
@@ -193,16 +197,18 @@ class SkillRegistry:
         return s
 
     def skill(self, name: str | None = None, description: str = "", params: dict | None = None, router=None,
-              risk: str = "write", external: bool | None = None):
+              risk: str = "write", external: bool | None = None, verify=None, reconcile=None):
         """Decorator registering a function as a skill in this registry.
 
         ``risk`` is "read", "write" (the default, so you're asked before it runs) or "danger".
-        ``external=True`` marks a skill whose output comes from outside (web, another service)."""
+        ``external=True`` marks a skill whose output comes from outside (web, another service).
+        ``verify(args, result)`` and ``reconcile(args)`` check, without changing anything, whether a change
+        took effect and (after a crash) whether it already had; each returns True, False or None."""
 
         def wrap(func):
             self.register(Skill(name or func.__name__, description or (func.__doc__ or "").strip(), func,
                                 params or {}, router, source=getattr(func, "__module__", "plugin"), risk=risk,
-                                external=external))
+                                external=external, verify=verify, reconcile=reconcile))
             return func
 
         return wrap
@@ -352,15 +358,27 @@ _target: SkillRegistry | None = None  # registry receiving @skill while a plugin
 
 
 def skill(name: str | None = None, description: str = "", params: dict | None = None, router=None,
-          risk: str = "write", external: bool | None = None):
+          risk: str = "write", external: bool | None = None, verify=None, reconcile=None):
     """Register a skill from a plugin file. ``risk``: "read", "write" (default) or "danger".
-    ``external=True``: its output comes from outside (a web page, another service)."""
+    ``external=True``: its output comes from outside (a web page, another service).
+    ``verify``/``reconcile``: read-only checks for a change (see :meth:`SkillRegistry.skill`)."""
 
     def wrap(func):
         registry = _target or _default
-        return registry.skill(name, description, params, router, risk, external)(func)
+        return registry.skill(name, description, params, router, risk, external, verify, reconcile)(func)
 
     return wrap
+
+
+_call = threading.local()
+
+
+def idempotency_key() -> str | None:
+    """While a job runs a step that changes something: a key that stays the same for that exact call
+    across retries and restarts. Pass it to a service that de-duplicates by key (an ``Idempotency-Key``
+    header, a client request id), so a repeat after a crash can't happen twice. ``None`` outside a job.
+    A key only helps if the service honours it."""
+    return getattr(_call, "key", None)
 
 
 # ------------------------------------------------------------ built-ins
@@ -602,8 +620,14 @@ def _register_builtins(reg: SkillRegistry) -> None:
 
         return rz(text)
 
+    def _remembered(args, result=None):
+        from .memory import Memory
+
+        want = re.sub(r"\s+", " ", str(args.get("text", ""))).strip()
+        return any(it["text"] == want for it in Memory().items)  # read back from disk, not the reply
+
     @reg.skill("remember", "Keep a fact or preference in long-term memory.", {"text": "what to remember"},
-               router=_route_remember, risk="write")
+               router=_route_remember, risk="write", verify=_remembered, reconcile=_remembered)
     def remember(text: str):
         from .memory import Memory
 

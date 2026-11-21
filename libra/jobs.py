@@ -259,19 +259,56 @@ def create(goal: str, registry, name: str = "", autonomous: bool = False, permis
 
 
 # ------------------------------------------------------------------ running
+def _calls(job: dict, step: dict) -> list[tuple[str | None, dict]]:
+    """The calls a step still has to make: (item, concrete arguments), one per remaining item."""
+    from .agent import _items, _subst
+
+    prev_text, prev_data = _prev(job, step)
+    if not step["foreach"]:
+        return [(None, _subst(step["args"], prev_text))]
+    items = (step["items"] or _items(prev_data, prev_text))[: int(job["limits"]["max_items"])]
+    return [(it, _subst(step["args"], prev_text, it)) for it in items if it not in step["item_results"]]
+
+
+def _idem_key(job: dict, step: dict, item: str | None) -> str:
+    """Stable for one call of one step of one job: the same after a retry or a restart."""
+    raw = json.dumps([job["id"], step["n"], step["skill"], item], ensure_ascii=False)
+    return "libra-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _effect(registry, step: dict, args: dict, result, item: str | None) -> None:
+    """Check that a change took effect, with the skill's own read-only ``verify``. No verifier: not
+    checked. A verifier that fails, can't tell or crashes means a person should look (needs_review)."""
+    try:
+        verify = registry.get(step["skill"]).verify
+    except KeyError:
+        verify = None
+    if verify is None:
+        return
+    try:
+        ok = verify(args, result)
+        status, note = {True: "passed", False: "failed"}.get(ok, "unknown"), ""
+    except Exception as exc:  # a verifier that breaks proves nothing
+        status, note = "unknown", f"{type(exc).__name__}: {exc}"[:300]
+    step.setdefault("evidence", []).append({"item": item, "status": status, "at": _now(),
+                                            **({"note": note} if note else {})})
+
+
+def _taint(job: dict, step: dict, registry) -> None:
+    try:
+        own = registry.get(step["skill"]).untrusted_output
+    except KeyError:
+        own = True
+    step["untrusted"] = bool(own or any(job["steps"][d].get("untrusted") for d in step.get("inputs", [])))
+
+
 def _operation(job: dict, step: dict) -> dict:
     """The exact operation a step would perform now: its skill, risk and concrete arguments (after
     ``{prev}``/``{item}`` substitution, one call per remaining item). An approval is bound to its digest,
     so it can't be used for anything else: other arguments, another skill, another risk, another job."""
-    from .agent import _items, _subst
     from .trust import redact
 
-    prev_text, prev_data = _prev(job, step)
-    if step["foreach"]:
-        items = (step["items"] or _items(prev_data, prev_text))[: int(job["limits"]["max_items"])]
-        calls = [_subst(step["args"], prev_text, it) for it in items if it not in step["item_results"]]
-    else:
-        calls = [_subst(step["args"], prev_text)]
+    calls = [args for _, args in _calls(job, step)]
     record = {"schema": "libra.operation.v1", "job": job["id"], "step": step["n"], "skill": step["skill"],
               "risk": step["risk"], "calls": calls}
     blob = json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False, default=str)
@@ -291,7 +328,38 @@ def _wait(job: dict, step: dict, kind: str, reason: str) -> None:
            **({"operation": job["waiting"]["operation"]["digest"]} if kind != "limit" else {}))
 
 
-def _recover(job: dict) -> None:
+def _reconcile(job: dict, s: dict, registry) -> bool | None:
+    """After a crash during a change: ask the skill's read-only ``reconcile`` whether the interrupted call
+    had already happened. True: record it as done. False: it can run again (trust rules apply as usual).
+    None (no reconcile, can't tell, or it crashed): a person decides."""
+    try:
+        reconcile = registry.get(s["skill"]).reconcile
+    except KeyError:
+        reconcile = None
+    calls = _calls(job, s)
+    if reconcile is None or not calls:
+        return None
+    item, args = calls[0]  # calls run in order, so only the first unfinished one can have been in flight
+    try:
+        happened = reconcile(args)
+    except Exception:
+        happened = None
+    if happened is None:
+        return None
+    _event(job, "reconciled", step=s["n"] + 1, item=item, happened=bool(happened))
+    if not happened:
+        return False
+    note = "already done before the restart (confirmed by reconcile)"
+    s.setdefault("evidence", []).append({"item": item, "status": "passed", "at": _now(), "note": note})
+    if s["foreach"]:
+        s["item_results"][item] = {"ok": True, "text": note, "data": None}
+        return True
+    s["status"], s["finished"], s["output"], s["data"], s["error"] = "done", _now(), note, None, ""
+    _taint(job, s, registry)
+    return True
+
+
+def _recover(job: dict, registry=None) -> None:
     """Handle steps that were in progress when the previous runner stopped."""
     for s in job["steps"]:
         if s["status"] != "running":
@@ -300,6 +368,12 @@ def _recover(job: dict) -> None:
             s["status"] = "pending"
             _event(job, "recovered", step=s["n"] + 1, action="re-run (read-only)")
         else:
+            outcome = _reconcile(job, s, registry) if registry is not None else None
+            if outcome is not None:
+                if s["status"] == "running":
+                    s["status"] = "pending"  # the rest of its items (or the call itself) still to do
+                _save(job)
+                continue
             s["status"] = "pending"
             done = len(s["item_results"])
             _wait(job, s, "interrupted",
@@ -339,17 +413,25 @@ def _jsonable(data):
 
 
 def _call(registry, skill: str, args: dict, risk: str, attempts: int, retry_delay: float, job, step,
-          approved: bool = False):
+          approved: bool = False, item: str | None = None):
     from .autonomy import TRANSIENT
+    from .skills import _call as current
 
     r = None
-    for k in range(attempts if risk == "read" else 1):
-        if k:
-            time.sleep(retry_delay * (2 ** (k - 1)))
-            _event(job, "retry", step=step["n"] + 1, attempt=k + 1, after=r.text[:200])
-        r = registry.run(skill, args, approved=approved)
-        if r.ok or not TRANSIENT.search(r.text or ""):
-            break
+    if risk != "read":
+        current.key = _idem_key(job, step, item)
+    try:
+        for k in range(attempts if risk == "read" else 1):
+            if k:
+                time.sleep(retry_delay * (2 ** (k - 1)))
+                _event(job, "retry", step=step["n"] + 1, attempt=k + 1, after=r.text[:200])
+            r = registry.run(skill, args, approved=approved)
+            if r.ok or not TRANSIENT.search(r.text or ""):
+                break
+    finally:
+        current.key = None
+    if risk != "read" and r.ok:
+        _effect(registry, step, args, r, item)
     return r
 
 
@@ -380,7 +462,7 @@ def _run_step(job: dict, step: dict, registry, retry_delay: float, cancelled, ap
                 step["status"] = "pending"
                 return "cancelled"
             r = _call(registry, step["skill"], _subst(step["args"], prev_text, item), step["risk"], attempts,
-                      retry_delay, job, step, approved)
+                      retry_delay, job, step, approved, item)
             if not r.ok and _blocked(r.text):
                 step["status"], step["error"] = "failed", r.text
                 return "failed"
@@ -434,20 +516,33 @@ def _finish(job: dict) -> None:
     statuses = {s["status"] for s in job["steps"]}
     done = [s for s in job["steps"] if s["status"] == "done"]
     output = done[-1]["output"] if done else ""
+    # What each change actually did, by its own read-only check: the output text alone can't show that.
+    effects = []
+    for s in done:
+        if s["risk"] == "read":
+            continue
+        seen = {e["status"] for e in s.get("evidence", [])}
+        status = ("failed" if "failed" in seen else "unknown" if "unknown" in seen else
+                  "passed" if seen else "not_checked")
+        effects.append({"step": s["n"] + 1, "skill": s["skill"], "status": status})
+    bad = [e for e in effects if e["status"] in ("failed", "unknown")]
     if statuses <= {"done"}:
         checks = [{"check": label, "ok": bool(fn(output))} for label, fn in _checks(job["goal"])]
-        verified = all(c["ok"] for c in checks)
+        verified = all(c["ok"] for c in checks) and not bad
         job["status"] = "done" if verified else "needs_review"
     else:
         checks, verified = [], False
         job["status"] = "failed"
     job["waiting"] = None
     job["result"] = {"output": output, "sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
-                     "checks": checks, "verified": verified, "finished": _now(),
+                     "checks": checks, "effects": effects, "verified": verified, "finished": _now(),
                      "problems": [f"step {s['n'] + 1} ({s['skill']}): {s['error'] or s['status']}"
-                                  for s in job["steps"] if s["status"] != "done"]}
+                                  for s in job["steps"] if s["status"] != "done"]
+                     + [f"step {e['step']} ({e['skill']}): its effect check {'failed' if e['status'] == 'failed' else 'could not tell'}"
+                        for e in bad]}
     _save(job)
-    _event(job, "finished", status=job["status"], verified=verified, sha256=job["result"]["sha256"])
+    _event(job, "finished", status=job["status"], verified=verified, sha256=job["result"]["sha256"],
+           **({"effects": {e["step"]: e["status"] for e in effects}} if effects else {}))
 
 
 def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
@@ -470,7 +565,7 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
                           "doesn't cover it. Check it again: " + w["reason"].split(" (operation ")[0])
                 return job  # paused until the owner approves or skips
         if job["status"] != "waiting":
-            _recover(job)
+            _recover(job, registry)
             if job["status"] == "waiting":
                 return job
         job["status"], job["waiting"] = "running", None
@@ -549,11 +644,7 @@ def run(job_id: str, registry, log=None, retry_delay: float = 2.0) -> dict:
             if outcome == "failed":
                 outcome = _try_alternatives(job, step, registry, retry_delay, cancelled)
             if outcome == "done":  # taint travels with the data
-                try:
-                    own = registry.get(step["skill"]).untrusted_output
-                except KeyError:
-                    own = True
-                step["untrusted"] = bool(own or any(job["steps"][d].get("untrusted") for d in step.get("inputs", [])))
+                _taint(job, step, registry)
             _save(job)
             _event(job, "step " + outcome, step=step["n"] + 1, skill=step["skill"],
                    **({"error": step["error"][:300]} if step["error"] else {}))
@@ -691,6 +782,11 @@ def describe(job: dict) -> str:
     if res:
         for c in res["checks"]:
             lines.append(f"  check {'✓' if c['ok'] else '✗'} {c['check']}")
+        for e in res.get("effects", []):
+            mark = {"passed": "✓", "failed": "✗", "unknown": "?"}.get(e["status"], "·")
+            lines.append(f"  effect {mark} step {e['step']} ({e['skill']}): "
+                         + {"passed": "confirmed", "failed": "check failed", "unknown": "could not tell",
+                            "not_checked": "not checked (the skill has no verify)"}[e["status"]])
         lines.append(f"  result sha256 {res['sha256'][:16]}… ({'verified' if res['verified'] else 'not verified'})")
         if res["output"]:
             lines += ["", res["output"][:4000]]
