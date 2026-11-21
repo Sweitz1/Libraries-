@@ -312,14 +312,17 @@ def _registry(args, interactive: bool = True):
 
 def _skill_line(s) -> str:
     desc = s.description if len(s.description) <= 90 else s.description[:89] + "…"
-    return f"  /{s.name} {s.usage()}".rstrip() + f"  [{s.risk}] — {desc}"
+    risk = f"{s.risk}, says {s.claimed_risk}: plugin not accepted" if s.claimed_risk else s.risk
+    return f"  /{s.name} {s.usage()}".rstrip() + f"  [{risk}] — {desc}"
 
 
 def _skill_info(skills, name: str) -> str:
     s = skills.get(name)
     decision, reason = skills.policy.decide(s.name, s.risk) if skills.policy else ("allow", "no policy")
     return "\n".join([f"{s.name}  ({s.source})", f"  {s.description}", f"  usage: /{s.name} {s.usage()}",
-                      f"  risk: {s.risk}; trust: {decision} ({reason})",
+                      f"  risk: {s.risk}; trust: {decision} ({reason})"
+                      + (f"\n  the plugin says {s.claimed_risk}; after reading {s.source}, accept it with: "
+                         f"libra trust accept-plugin {s.source}" if s.claimed_risk else ""),
                       "  parameters: " + json.dumps(s.schema()["function"]["parameters"], indent=2).replace(
                           "\n", "\n  ")])
 
@@ -444,6 +447,28 @@ def cmd_trust(args) -> None:
     from .trust import Policy
 
     policy = Policy()
+    if args.action in ("accept-plugin", "plugins"):
+        from .trust import accept_plugin, accepted_plugins
+
+        if args.action == "plugins":
+            accepted = accepted_plugins()
+            for path, digest in sorted(accepted.items()):
+                state = "missing"
+                if os.path.exists(path):
+                    from .trust import plugin_digest
+
+                    with open(path, "rb") as f:
+                        state = "accepted" if plugin_digest(f.read()) == digest else "changed since accepted"
+                print(f"  {path}  {state}  sha256 {digest[:16]}…")
+            if not accepted:
+                print("  (no plugins accepted; their read-only skills ask before running until you do)")
+            return
+        if not args.target or not os.path.isfile(os.path.expanduser(args.target)):
+            raise SystemExit("usage: libra trust accept-plugin FILE.py   (read the file first)")
+        digest = accept_plugin(args.target)
+        print(f"accepted {os.path.abspath(os.path.expanduser(args.target))} (sha256 {digest[:16]}…). "
+              "Its skills' own risk labels are trusted until the file changes.")
+        return
     if args.action == "list":
         print("defaults: " + ", ".join(f"{k} = {v}" for k, v in policy.defaults.items()))
         for target, decision in sorted(policy.rules.items()):
@@ -464,7 +489,11 @@ def cmd_trust(args) -> None:
     else:
         if not args.target:
             raise SystemExit(f"usage: libra trust {args.action} TARGET")
-        if args.action == "reset":
+        if args.action == "reset" and args.target.endswith(".py"):
+            from .trust import forget_plugin
+
+            print("no longer accepted" if forget_plugin(args.target) else f"{args.target} wasn't accepted")
+        elif args.action == "reset":
             print("reset" if policy.reset(args.target) else f"no rule for {args.target}")
         else:
             policy.set(args.target, args.action)
@@ -1080,8 +1109,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.set_defaults(func=cmd_api)
 
     tr = sub.add_parser("trust", help="allow, ask or deny skills by name, source or risk level")
-    tr.add_argument("action", choices=["list", "allow", "ask", "deny", "reset", "log"])
-    tr.add_argument("target", nargs="?", help="skill name, source prefix (mcp.github, api.petstore) or read/write/danger")
+    tr.add_argument("action", choices=["list", "allow", "ask", "deny", "reset", "log", "accept-plugin", "plugins"])
+    tr.add_argument("target", nargs="?", help="skill name, source prefix (mcp.github, api.petstore), read/write/danger, "
+                    "or a plugin file (accept-plugin; reset FILE.py withdraws it)")
     tr.add_argument("-n", type=int, default=20, help="log: number of entries")
     tr.set_defaults(func=cmd_trust)
 

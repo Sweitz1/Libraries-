@@ -18,7 +18,7 @@ Libra runs on your own machine and network, so the boundaries that matter are:
 - **The installer**, which runs as root.
 - **The Android app**: its token storage and WebView.
 
-Not in scope: plugins and MCP servers you install yourself (they run with your permissions by design), running with `--no-auth` or `--allow-private`, and anyone who already has your token.
+Not in scope: plugins and MCP servers you install yourself (they run with your permissions by design; a plugin's own risk labels are only believed after `libra trust accept-plugin`), running with `--no-auth` or `--allow-private`, and anyone who already has your token.
 
 ## Automated checks
 

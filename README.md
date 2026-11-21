@@ -537,6 +537,17 @@ def save_note(path: str, text: str):
 
 Plugins in `~/.libra/plugins/` load automatically. Return a string, or a dict or list (shown as JSON). Mark read-only skills with `risk="read"`. The default is `"write"`, which asks before running. To fetch web pages, use `libra.skills.fetcher()` so `--allow-private` applies. See `plugins/example_tools.py`. **Plugins run with your permissions, so only load code you trust.**
 
+**A plugin's own labels aren't believed until you accept it.** Until then, a skill it calls `risk="read"` is treated as a change: it asks before running, and is never retried or re-run by itself. Its output also counts as outside content. Read the file, then accept that exact content:
+
+```bash
+libra skill list --plugins my_plugins/              # [write, says read: plugin not accepted]
+libra trust accept-plugin my_plugins/greet.py       # after reading it
+libra trust plugins                                 # accepted files, and any that changed since
+libra trust reset my_plugins/greet.py               # withdraw it
+```
+
+Libra stores a SHA-256 of the file, so editing it (or an update you haven't read) needs a new acceptance. This stops a plugin from labelling a change as read-only. It can't stop a malicious plugin, which can do anything as soon as it loads. Only an isolated process could stop that, and Libra doesn't have one yet.
+
 ## Translation and language tools
 
 Libra translates between **any languages you have data for**, without calling an outside translation service. You bring bilingual data, and every result says how it was produced and how much to trust it.
