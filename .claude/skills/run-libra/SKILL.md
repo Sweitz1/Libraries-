@@ -1,4 +1,5 @@
 ---
+name: run-libra
 description: Launches a Libra server locally with a token and drives its phone/web app in a headless browser to see a change working, including the Agent tab's jobs and approvals. Use when asked to run, start, try or screenshot Libra, or to check a web-app or server change in the real app.
 argument-hint: "[what to look at, e.g. the Jobs panel]"
 ---

@@ -1,4 +1,5 @@
 ---
+name: add-libra-skill
 description: Adds a new skill (tool) to Libra, either built in or as a plugin, with the right risk level, outside-content marking, router, tests and planner coverage. Use when asked to add, write or build a Libra skill, tool or plugin (Libra's own skills, not Claude Code skills).
 argument-hint: "[what the skill should do]"
 ---
