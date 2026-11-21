@@ -30,6 +30,7 @@ STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js",
           "/icon.svg": ("icon.svg", "image/svg+xml")}
 OPEN_PATHS = {"/health", *STATIC}
 MAX_BODY = 2_000_000
+MAX_DRAIN = 16_000_000  # bodies bigger than this are cut off without reading
 MAX_FAILS, FAIL_WINDOW = 10, 600
 
 
@@ -298,8 +299,16 @@ def make_handler(engine: Engine):
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 if length > MAX_BODY:
-                    self._error(413, f"request body over {MAX_BODY // 1_000_000} MB")
+                    # Read and discard the upload first (up to a cap), so the client gets this error
+                    # instead of a broken connection while it is still sending.
+                    left = min(length, MAX_DRAIN)
+                    while left > 0:
+                        chunk = self.rfile.read(min(65536, left))
+                        if not chunk:
+                            break
+                        left -= len(chunk)
                     self.close_connection = True
+                    self._error(413, f"request body over {MAX_BODY // 1_000_000} MB")
                     return
                 body = json.loads(self.rfile.read(length) or b"{}")
                 if not isinstance(body, dict):
