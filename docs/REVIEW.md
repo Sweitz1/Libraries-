@@ -1,6 +1,6 @@
 # Libra: apps, servers and capabilities (for review)
 
-> **Reviewing?** Start from [VERIFY.md](VERIFY.md): it pins one commit, lists its CI results, and gives raw links and a prompt for an AI reviewer. Regenerate it with `scripts/verification_link.py --out docs/VERIFY.md`.
+> **Reviewing?** Start from [VERIFY.md](VERIFY.md) for what is proven (one commit, its CI results, raw links and a prompt for an AI reviewer), and [INVESTIGATE.md](INVESTIGATE.md) for where to dig (attack surface, known risks, ten hypotheses to test). Regenerate both with `scripts/verification_link.py [--kind investigate] --out docs/…`.
 
 This is a reviewer's map of the project. It lists every app, server, background service and capability, with links to the code. The links are relative, so they always point at the same version of the code as this file. Section [9](#9-response-to-the-first-external-review) answers the first external review point by point.
 

@@ -50,6 +50,9 @@ bash .claude/skills/verify/scripts/verify.sh --all   # everything, one JSON line
 
 ## Not verified
 
+Where to dig is on the [investigation page](INVESTIGATE.md): the attack surface, known risks and
+hypotheses to test, for the same commit.
+
 - A real deployment: Debian with systemd, Tailscale, Discord's servers, a GPU.
 - The Android app on a real phone or emulator (it's built, unit-tested and linted in CI only).
 - No professional security audit. The scanners above find common mistakes; they're not a penetration test.

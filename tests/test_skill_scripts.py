@@ -167,6 +167,20 @@ class VerificationLinkTest(unittest.TestCase):
         for path in re.findall(rf"/blob/{sha}/([^)]+)\)", page):  # every pinned file exists at that commit
             self.assertEqual(subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{sha}:{path}"]).returncode, 0, path)
 
+    def test_investigation_page(self):
+        sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        r = run(sys.executable, self.script, "--kind", "investigate", "--commit", "HEAD")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        page = r.stdout
+        for section in ("## Attack surface", "## Known residual risks", "## Hypotheses worth testing",
+                        "## Not verified at all", "## How to report", "## A prompt for an AI investigator"):
+            self.assertIn(section, page)
+        self.assertEqual(len(re.findall(r"^\| H\d+ \|", page, re.M)), 10)
+        self.assertIn("/security/advisories/new", page)  # private reporting, not public issues
+        for path in re.findall(rf"/blob/{sha}/([^)]+)\)", page):
+            self.assertEqual(subprocess.run(["git", "-C", ROOT, "cat-file", "-e", f"{sha}:{path}"]).returncode, 0, path)
+        self.assertEqual(run(sys.executable, self.script, "--kind", "audit").returncode, 2)
+
     def test_errors(self):
         self.assertIn("Exit codes", run(sys.executable, self.script, "--help").stdout)
         r = run(sys.executable, self.script, "--frob")
