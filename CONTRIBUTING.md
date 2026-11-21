@@ -34,7 +34,7 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 - Update the README or `docs/` when behaviour changes, and add a line to `CHANGELOG.md` under *Unreleased*.
 - Open a pull request; the template lists what reviewers check. CI must be green.
 
-**Working with Claude Code?** The repository has project skills in [`.claude/skills/`](.claude/skills):
+**Working with Claude Code?** The repository has project skills in [`.claude/skills/`](.claude/skills). To write your own, start from [`templates/claude-skill/`](templates/claude-skill/SKILL.md):
 
 | Skill | For |
 |---|---|
@@ -44,6 +44,7 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 | `/answer-review` | Works through a code review point by point and records the response in `docs/REVIEW.md` |
 | `/summarize-changes` | Summarizes uncommitted changes and flags risks, for a commit message or a quick review |
 | `api-conventions` | Not run as a command: Claude follows it when writing or changing API endpoints and clients (paths, the error format, status codes, limits, auth and trust) |
+| `/deploy user@server [version]` | Upgrades your Debian server with the installer, checks it came up, and rolls back if not. You start it yourself, and it runs in its own context |
 | `/release X.Y.Z` | Cuts a release. You start it yourself: Claude never starts it on its own |
 
 Starting points: [`templates/`](templates) has a plugin, an evaluation suite and a training config to copy. [`docs/REVIEW.md`](docs/REVIEW.md) maps every part of the code.
