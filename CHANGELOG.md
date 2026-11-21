@@ -22,6 +22,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 - **A plugin's own risk labels aren't believed until you accept it** (`libra trust accept-plugin FILE`, pinned to the file's SHA-256). Until then, its "read" skills ask before running, and their output counts as outside content. `libra trust plugins` lists accepted files and any that changed; `libra trust reset FILE.py` withdraws one. **If you use plugins with read-only skills, accept them once after upgrading.**
 
+- **`libra eval kb`** measures answers from your files on your own question suite: right (quoting the expected passage), wrong (answered from elsewhere), and refused (questions your files can't answer). It ships with a suite for Libra's own docs.
+
 ### Fixed
 - A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
 - A sign-in link opened in a tab that already showed the app was ignored (only the `#fragment` changed).

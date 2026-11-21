@@ -764,12 +764,19 @@ def cmd_eval(args) -> None:
         if not rows:
             print("no results yet (libra eval plan, or libra eval model <checkpoint>)")
         for r in rows[-args.n:]:
-            what = r.get("suite") if r["kind"] == "plan" else f"{os.path.basename(r.get('model', ''))}@{r.get('version')}"
+            what = r.get("suite") if r["kind"] in ("plan", "kb") else f"{os.path.basename(r.get('model', ''))}@{r.get('version')}"
             print(f"  {r['at'][:16].replace('T', ' ')}  {r['kind']:<5} {what:<36} "
                   + "  ".join(f"{k}={v}" for k, v in evaluate.headline(r).items() if v is not None))
         return
     if args.action == "plan":
         result = evaluate.plan_suite(_registry(args, interactive=False), args.suite or evaluate.DEFAULT_PLAN_SUITE)
+    elif args.action == "kb":
+        from .knowledge import DEFAULT_WORKSPACE, Workspace
+
+        if not args.suite:
+            raise SystemExit("usage: libra eval kb --suite questions.jsonl [--workspace DIR]\n"
+                             '  each line: {"question": "…", "expect": "regex"} or {"question": "…", "unanswerable": true}')
+        result = evaluate.kb_suite(Workspace(args.workspace or DEFAULT_WORKSPACE), args.suite)
     else:
         if not args.model:
             raise SystemExit("usage: libra eval model <checkpoint> [--text heldout.txt] [--suite suite.jsonl]")
@@ -1164,11 +1171,12 @@ def build_parser() -> argparse.ArgumentParser:
     ag.set_defaults(func=cmd_agent)
 
     ev = sub.add_parser("eval", help="benchmarks: planner tool choice, model loss and behaviour, history")
-    ev.add_argument("action", choices=["plan", "model", "history"])
+    ev.add_argument("action", choices=["plan", "model", "kb", "history"])
     ev.add_argument("model", nargs="?", help="model: the checkpoint to score")
     ev.add_argument("--suite", help="a JSON Lines suite (default: the built-in one)")
     ev.add_argument("--text", help="model: held-out text file for loss and perplexity")
     ev.add_argument("--no-suite", action="store_true", help="model: only the held-out text")
+    ev.add_argument("--workspace", help="kb: the knowledge base to score (default ~/.libra/workspace)")
     ev.add_argument("--no-record", action="store_true", help="don't add this result to the history")
     ev.add_argument("--json", action="store_true")
     ev.add_argument("-n", type=int, default=30, help="history: how many")
