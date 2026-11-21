@@ -24,3 +24,8 @@ jobs:
           libra data data --out ds && libra train ds --out ckpt2 --steps 5 --eval-every 5 --vocab 400 --ctx 32 --layers 1 --embd 32 --heads 2
           libra skill list --plugins plugins
           libra skill run calc "(2+3)*4"
+          export LIBRA_HOME=$PWD/libra-home
+          libra mcp add fake -- python tests/fixtures/fake_mcp_server.py
+          libra skill find echo
+          libra skill run mcp.fake.echo hello
+          libra trust list

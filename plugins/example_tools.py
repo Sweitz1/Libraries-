@@ -8,7 +8,7 @@ import re
 from libra.skills import skill
 
 
-@skill("word_count", "Count words, characters and sentences in some text.", {"text": "the text to measure"})
+@skill("word_count", "Count words, characters and sentences in some text.", {"text": "the text to measure"}, risk="read")
 def word_count(text: str) -> dict:
     return {
         "words": len(text.split()),
@@ -22,7 +22,7 @@ def _route_headlines(message: str):
     return {"url": m.group(1)} if m else None
 
 
-@skill("headlines", "List the headings of a web page.", {"url": "page to read"}, router=_route_headlines)
+@skill("headlines", "List the headings of a web page.", {"url": "page to read"}, router=_route_headlines, risk="read")
 def headlines(url: str) -> str:
     from libra.skills import fetcher
     from libra.web import scrape

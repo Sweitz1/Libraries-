@@ -30,7 +30,8 @@ import threading
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 
-DEFAULT_WORKSPACE = os.path.join(os.path.expanduser("~"), ".libra", "workspace")
+DEFAULT_WORKSPACE = os.path.join(os.environ.get("LIBRA_HOME") or os.path.join(os.path.expanduser("~"), ".libra"),
+                                 "workspace")
 TEXT_EXT = {".txt", ".md", ".rst", ".text", ".log"}
 HTML_EXT = {".html", ".htm", ".xhtml"}
 TRANSCRIPT_EXT = {".srt", ".vtt"}

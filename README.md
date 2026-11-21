@@ -17,8 +17,12 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/server.py` | OpenAI-compatible HTTP API (standard library only), with streaming |
 | `libra/web.py` | Web fetcher (robots.txt, rate limits, private-address guard), HTML parser, CSS selector engine, scraper and crawler |
 | `libra/skills.py` | Skills (tools), plugin loader, message routing, built-in skills |
+| `libra/catalog.py` | Skill catalog: SQLite with an inverted BM25 index, lazy loading, schema-based argument checking |
+| `libra/mcp.py` | MCP client (stdio and Streamable HTTP) that syncs server tools into the catalog |
+| `libra/openapi.py`, `libra/yamlish.py` | OpenAPI/Swagger importer and caller; a small YAML reader for specs |
+| `libra/trust.py` | Risk levels, allow/ask/deny rules, confirmation prompts, audit log |
 | `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
-| `libra/cli.py` | `libra data / train / generate / chat / serve / kb / skill / scrape / crawl / info` |
+| `libra/cli.py` | `libra data / train / generate / chat / serve / kb / skill / mcp / api / trust / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -185,7 +189,7 @@ A plugin is a `.py` file. Each `@skill` function becomes a tool, and its paramet
 # my_plugins/greet.py
 from libra.skills import skill
 
-@skill("greet", "Say hello to someone", params={"name": "who to greet"},
+@skill("greet", "Say hello to someone", params={"name": "who to greet"}, risk="read",
        router=lambda msg: {"name": msg[6:]} if msg.lower().startswith("greet ") else None)
 def greet(name: str, times: int = 1) -> str:
     return " ".join([f"Hello, {name}!"] * times)
@@ -196,7 +200,73 @@ libra chat --plugins my_plugins/          # /greet Ana times=2   or just: greet 
 libra serve --plugins my_plugins/ --auto-skills
 ```
 
-Plugins in `~/.libra/plugins/` load automatically. Return a string, or a dict or list (shown as JSON). To fetch web pages, use `libra.skills.fetcher()` so `--allow-private` applies. See `plugins/example_tools.py`. **Plugins run with your permissions, so only load code you trust.**
+Plugins in `~/.libra/plugins/` load automatically. Return a string, or a dict or list (shown as JSON). Mark read-only skills with `risk="read"`. The default is `"write"`, which asks before running. To fetch web pages, use `libra.skills.fetcher()` so `--allow-private` applies. See `plugins/example_tools.py`. **Plugins run with your permissions, so only load code you trust.**
+
+## Skill catalog: MCP servers, web APIs and trust controls
+
+Beyond the built-in skills and plugins, Libra keeps a **skill catalog**: a searchable index that can hold anything from a handful to **a million** skills. It was tested with 1,000,000 entries: 73 s to build, a 567 MB database, and 140–260 ms per search. Catalog skills are only *described* until you run one. Then the MCP server starts or the API is called.
+
+```bash
+libra skill find send email          # search everything: built-ins, plugins, catalog
+libra skill info mcp.mail.send       # parameters, risk level and trust decision
+libra skill run api.pets.list_pets limit=5
+```
+
+In chat, `/find <words>` searches and `/info <name>` shows details. Any catalog skill runs like a built-in, for example `/api.pets.get_pet_by_id 42`. Catalog skills are never run automatically from plain chat; you always choose one by name.
+
+### MCP servers
+
+Every tool of every MCP server you add becomes a skill named `mcp.<server>.<tool>`. Both MCP transports are supported: local servers over stdio, and remote ones over Streamable HTTP.
+
+```bash
+libra mcp add files -- npx -y @modelcontextprotocol/server-filesystem ~/Documents
+libra mcp add remote --url https://example.com/mcp --header "Authorization: Bearer ${MY_TOKEN}"
+libra mcp list
+libra mcp sync all        # refresh tool lists
+libra mcp remove files
+```
+
+Servers are saved in `~/.libra/mcp.json`, in the same format other MCP apps use, so you can copy entries across. `${VAR}` in headers and env values is filled from your environment, so tokens stay out of the file. Server logs go to `~/.libra/mcp-stderr.log`.
+
+### Web APIs (OpenAPI / Swagger)
+
+One spec file becomes one skill per endpoint, named `api.<name>.<operation>`. JSON and YAML, OpenAPI 3 and Swagger 2 are all supported.
+
+```bash
+libra api add pets ./petstore.yaml --bearer-env PET_TOKEN
+libra api add weather https://example.com/openapi.json --header-env X-API-Key WEATHER_KEY
+libra api add-dir ./specs/       # import a whole folder, e.g. a mirror of a public API directory
+libra api list
+```
+
+A skill's arguments are the endpoint's path, query and header parameters, plus the request body's fields. **API keys are never stored.** `~/.libra/apis.json` only records which environment variable to read (`--bearer-env`, `--header-env`, `--query-env`, `--basic-env`). Many public APIs need a key or an account, so check before relying on one.
+
+### Trust controls
+
+Every skill has a risk level:
+
+| Risk | Examples | Default |
+|---|---|---|
+| `read` | built-ins, GET requests, MCP tools marked read-only | allow |
+| `write` | create, update, send, post, PUT/PATCH/POST requests | **ask** |
+| `danger` | delete, pay, transfer, run commands, DELETE requests, MCP tools marked destructive | **ask** |
+
+MCP tools' own `readOnlyHint` and `destructiveHint` annotations are used when present. Otherwise the risk is guessed from the tool's name, and the guess errs toward asking: `add` (two numbers) is treated like "add a record".
+
+```bash
+libra trust allow mcp.files            # everything from one source
+libra trust deny api.bank.transfer     # one skill; deny always wins, even over --yes
+libra trust allow write                # change a default
+libra trust list
+libra trust log                        # recent calls: decision, result, arguments (secrets redacted)
+libra trust reset mcp.files
+```
+
+- **In chat** you're asked before an `ask` skill runs. Answer `y` (yes), `n` (no) or `always` (saves an allow rule).
+- **On the command line** you're asked the same way. Pass `--yes` to approve `ask` skills in scripts.
+- **On the server** nobody can be asked, so `ask` skills are refused with HTTP 403 and the exact `libra trust allow …` command. `GET /v1/skills?q=words` searches the catalog over HTTP.
+
+Every catalog and plugin call is logged to `~/.libra/audit.jsonl`. Settings live in `~/.libra/`; set `LIBRA_HOME` to use another folder.
 
 ## Web scraper and crawler
 
@@ -250,7 +320,7 @@ libra serve --model checkpoints/mine --host 0.0.0.0 --port 8000
 | `GET /v1/models` | lists the model |
 | `POST /v1/chat/completions` | OpenAI chat format, `stream: true` supported |
 | `POST /v1/completions` | plain text completion |
-| `GET /v1/skills` | skills as OpenAI tool schemas |
+| `GET /v1/skills` | skills as OpenAI tool schemas; `?q=words` searches the catalog |
 | `POST /v1/skills/<name>` | run a skill: `{"url": "…"}` or `{"arguments": "{…}"}` |
 | `GET /health` | status check |
 

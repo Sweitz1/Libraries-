@@ -31,7 +31,8 @@ import shlex
 from dataclasses import dataclass, field
 from typing import Callable
 
-DEFAULT_PLUGIN_DIR = os.path.join(os.path.expanduser("~"), ".libra", "plugins")
+DEFAULT_PLUGIN_DIR = os.path.join(os.environ.get("LIBRA_HOME") or os.path.join(os.path.expanduser("~"), ".libra"),
+                                  "plugins")
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 
 
@@ -43,12 +44,32 @@ class Skill:
     params: dict = field(default_factory=dict)  # name -> description
     router: Callable | None = None  # message -> kwargs dict, or None if not relevant
     source: str = "builtin"
+    risk: str = "read"  # read, write or danger (see libra.trust)
+    input_schema: dict | None = None  # JSON schema for catalog skills (MCP tools, API operations)
 
     def signature(self) -> inspect.Signature:
         return inspect.signature(self.func)
 
+    def param_names(self) -> list[str]:
+        """Parameters in the order positional arguments fill them (required first)."""
+        if self.input_schema is not None:
+            props = list((self.input_schema.get("properties") or {}).keys())
+            req = [p for p in self.input_schema.get("required") or [] if p in props]
+            return req + [p for p in props if p not in req]
+        return [p for p, v in self.signature().parameters.items() if v.kind not in (v.VAR_POSITIONAL, v.VAR_KEYWORD)]
+
+    def usage(self) -> str:
+        if self.input_schema is not None:
+            req = set(self.input_schema.get("required") or [])
+            return " ".join(f"<{p}>" if p in req else f"[{p}]" for p in self.param_names())
+        return " ".join(f"[{p}]" if v.default is not v.empty else f"<{p}>"
+                        for p, v in self.signature().parameters.items() if v.kind not in (v.VAR_POSITIONAL, v.VAR_KEYWORD))
+
     def schema(self) -> dict:
         """OpenAI-style function schema, so other agents can call this skill."""
+        if self.input_schema is not None:
+            return {"type": "function", "function": {"name": self.name, "description": self.description,
+                                                     "parameters": self.input_schema}}
         props, required = {}, []
         for name, p in self.signature().parameters.items():
             if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
@@ -90,8 +111,66 @@ def _coerce(value, annotation):
 
 
 class SkillRegistry:
-    def __init__(self):
+    """Skills in memory (built-ins, plugins) plus, optionally, the on-disk catalog.
+
+    ``policy`` (a :class:`libra.trust.Policy`) gates every run; ``confirm(skill, args)``
+    answers "ask" decisions. Without ``confirm``, "ask" means no.
+    """
+
+    def __init__(self, catalog=None, policy=None, confirm=None):
         self._skills: dict[str, Skill] = {}
+        self._catalog = catalog  # a Catalog, or a callable returning one (opened lazily)
+        self._loaded: dict[str, Skill] = {}
+        self.policy = policy
+        self.confirm = confirm
+
+    @property
+    def catalog(self):
+        if callable(self._catalog) and not hasattr(self._catalog, "search"):
+            self._catalog = self._catalog()
+        return self._catalog
+
+    def _from_catalog(self, name: str) -> Skill | None:
+        if name in self._loaded:
+            return self._loaded[name]
+        if self.catalog is None:
+            return None
+        entry = self.catalog.get(name)
+        if entry is None:
+            return None
+        from .catalog import make_runner
+
+        s = Skill(entry.name, entry.description, make_runner(entry), source=entry.source, risk=entry.risk,
+                  input_schema=entry.input_schema)
+        self._loaded[name] = s
+        return s
+
+    def search(self, query: str, limit: int = 10) -> list[Skill]:
+        """Skills matching ``query`` from built-ins, plugins and the catalog, best first.
+
+        Candidates are ranked by how many of the query's words their name and description
+        cover; the catalog's BM25 order breaks ties."""
+        from .knowledge import terms
+
+        def words(text: str) -> set:
+            return set(terms(re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text).replace("_", " ").replace(".", " ")))
+
+        q = words(query)
+        if not q:
+            return []
+        scored = []
+        for s in self.list():
+            cover = len(q & words(f"{s.name} {s.description}"))
+            if cover:
+                scored.append((cover, 0, s))
+        if self.catalog is not None:
+            for rank, (_, entry) in enumerate(self.catalog.search(query, limit * 3)):
+                cover = len(q & words(f"{entry.name} {entry.description}"))
+                s = self._from_catalog(entry.name)
+                if s is not None:
+                    scored.append((cover, rank, s))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [s for _, _, s in scored[:limit]]
 
     def register(self, s: Skill) -> Skill:
         if not re.fullmatch(r"[a-z][a-z0-9_]*", s.name):
@@ -99,45 +178,86 @@ class SkillRegistry:
         self._skills[s.name] = s
         return s
 
-    def skill(self, name: str | None = None, description: str = "", params: dict | None = None, router=None):
-        """Decorator registering a function as a skill in this registry."""
+    def skill(self, name: str | None = None, description: str = "", params: dict | None = None, router=None,
+              risk: str = "write"):
+        """Decorator registering a function as a skill in this registry.
+
+        ``risk`` is "read", "write" (the default, so you're asked before it runs) or "danger"."""
 
         def wrap(func):
             self.register(Skill(name or func.__name__, description or (func.__doc__ or "").strip(), func,
-                                params or {}, router, source=getattr(func, "__module__", "plugin")))
+                                params or {}, router, source=getattr(func, "__module__", "plugin"), risk=risk))
             return func
 
         return wrap
 
     def get(self, name: str) -> Skill:
-        if name not in self._skills:
-            raise KeyError(f"unknown skill {name!r}; available: {', '.join(sorted(self._skills))}")
-        return self._skills[name]
+        if name in self._skills:
+            return self._skills[name]
+        s = self._from_catalog(name)
+        if s is None:
+            hint = "; try /find <words>" if self.catalog is not None else ""
+            raise KeyError(f"unknown skill {name!r}{hint}; built-in: {', '.join(sorted(self._skills))}")
+        return s
 
     def __contains__(self, name: str) -> bool:
-        return name in self._skills
+        return name in self._skills or self._from_catalog(name) is not None
+
+    def check(self, s: Skill, args: dict) -> tuple[bool, str]:
+        """Apply the trust policy. Returns (allowed, decision or explanation)."""
+        if self.policy is None:
+            return True, "allow"
+        decision, reason = self.policy.decide(s.name, s.risk)
+        if decision == "allow":
+            return True, "allow"
+        if decision == "deny":
+            return False, (f"'{s.name}' is blocked ({reason}). To allow it: libra trust allow {s.name}")
+        if self.confirm is not None and self.confirm(s, args):
+            return True, "approved"
+        return False, (f"'{s.name}' is a {s.risk} skill and needs your approval ({reason}). "
+                       f"Approve it when asked in chat, or allow it: libra trust allow {s.name}")
 
     def list(self) -> list[Skill]:
         return [self._skills[k] for k in sorted(self._skills)]
 
     def run(self, name: str, args: dict | None = None) -> SkillResult:
+        decision, s = "allow", None
         try:
             s = self.get(name)
-            sig = s.signature()
-            kwargs = {}
-            for key, value in (args or {}).items():
-                if key not in sig.parameters:
-                    raise TypeError(f"{name} has no parameter {key!r}; it takes {', '.join(sig.parameters)}")
-                kwargs[key] = _coerce(value, sig.parameters[key].annotation)
-            sig.bind(**kwargs)  # report missing arguments clearly
+            if s.input_schema is not None:
+                from .catalog import coerce_by_schema
+
+                kwargs = coerce_by_schema(args or {}, s.input_schema)
+            else:
+                sig = s.signature()
+                kwargs = {}
+                for key, value in (args or {}).items():
+                    if key not in sig.parameters:
+                        raise TypeError(f"{name} has no parameter {key!r}; it takes {', '.join(sig.parameters)}")
+                    kwargs[key] = _coerce(value, sig.parameters[key].annotation)
+                sig.bind(**kwargs)  # report missing arguments clearly
+            allowed, decision = self.check(s, kwargs)
+            if not allowed:
+                self._audit(s, kwargs, "deny", None)
+                return SkillResult(name, False, decision)
             out = s.func(**kwargs)
         except Exception as exc:  # skills report failures instead of crashing the chat/server
+            if s is not None:
+                self._audit(s, args or {}, decision, False)
             return SkillResult(name, False, f"{type(exc).__name__}: {exc}")
+        ok = out.ok if isinstance(out, SkillResult) else True
+        self._audit(s, kwargs, decision, ok)
         if isinstance(out, SkillResult):
             return out
         if isinstance(out, str):
             return SkillResult(name, True, out)
         return SkillResult(name, True, json.dumps(out, indent=2, ensure_ascii=False, default=str), out)
+
+    def _audit(self, s: Skill, args: dict, decision: str, ok) -> None:
+        if self.policy is not None and (s.source != "builtin" or s.risk != "read"):
+            from .trust import audit
+
+            audit(s.name, args, decision, ok, s.source)
 
     def parse_command(self, line: str) -> tuple[str, dict]:
         """``/name first-arg key=value ...`` -> (name, kwargs). Positional args fill parameters in order."""
@@ -145,8 +265,7 @@ class SkillRegistry:
         if not tokens:
             raise ValueError("empty command")
         name, rest = tokens[0], tokens[1:]
-        params = [p for p, v in self.get(name).signature().parameters.items()
-                  if v.kind not in (v.VAR_POSITIONAL, v.VAR_KEYWORD)]
+        params = self.get(name).param_names()
         kwargs, pos = {}, 0
         for tok in rest:
             key, eq, value = tok.partition("=")
@@ -213,12 +332,13 @@ class SkillRegistry:
 _target: SkillRegistry | None = None  # registry receiving @skill while a plugin loads
 
 
-def skill(name: str | None = None, description: str = "", params: dict | None = None, router=None):
-    """Register a skill from a plugin file (or into the default registry)."""
+def skill(name: str | None = None, description: str = "", params: dict | None = None, router=None,
+          risk: str = "write"):
+    """Register a skill from a plugin file. ``risk``: "read", "write" (default) or "danger"."""
 
     def wrap(func):
         registry = _target or _default
-        return registry.skill(name, description, params, router)(func)
+        return registry.skill(name, description, params, router, risk)(func)
 
     return wrap
 
@@ -298,7 +418,7 @@ def _truncate(text: str, max_chars: int) -> str:
 def _register_builtins(reg: SkillRegistry) -> None:
     @reg.skill("scrape", "Download a web page and extract its title, text, tables or CSS-selected elements.",
                {"url": "page to read", "select": "optional CSS selector(s), comma separated",
-                "format": "text, markdown or json", "max_chars": "limit on returned text"}, router=_route_scrape)
+                "format": "text, markdown or json", "max_chars": "limit on returned text"}, router=_route_scrape, risk="read")
     def scrape(url: str, select: str = "", format: str = "markdown", max_chars: int = 4000):
         from .web import scrape as do_scrape
         from .web import to_markdown
@@ -319,7 +439,7 @@ def _register_builtins(reg: SkillRegistry) -> None:
                {"url": "start page", "max_pages": "pages to fetch", "depth": "how many links deep",
                 "delay": "seconds between requests", "out": "optional .jsonl file to save pages to",
                 "include": "only follow URLs matching this regex", "exclude": "skip URLs matching this regex"},
-               router=_route_crawl)
+               router=_route_crawl, risk="read")
     def crawl(url: str, max_pages: int = 10, depth: int = 1, delay: float = 1.0, out: str = "",
               include: str = "", exclude: str = ""):
         from .web import crawl as do_crawl
@@ -340,7 +460,7 @@ def _register_builtins(reg: SkillRegistry) -> None:
         return SkillResult("crawl", True, "\n".join(lines), data)
 
     @reg.skill("links", "List the links on a web page.", {"url": "page to read", "filter": "only links containing this text"},
-               router=_route_links)
+               router=_route_links, risk="read")
     def links(url: str, filter: str = ""):
         from .web import scrape as do_scrape
 
@@ -350,22 +470,30 @@ def _register_builtins(reg: SkillRegistry) -> None:
         return SkillResult("links", True, text, found)
 
     @reg.skill("calc", "Evaluate an arithmetic expression exactly (no code is executed).",
-               {"expression": "for example (2+3)*4/7"}, router=_route_calc)
+               {"expression": "for example (2+3)*4/7"}, router=_route_calc, risk="read")
     def calc(expression: str):
         value = _eval(ast.parse(expression.replace("^", "**"), mode="eval"))
         if isinstance(value, float) and value.is_integer() and abs(value) < 1e15:
             value = int(value)
         return f"{expression.strip()} = {value}"
 
-    @reg.skill("time", "Current local date and time.", router=_route_time)
+    @reg.skill("time", "Current local date and time.", router=_route_time, risk="read")
     def time_skill():
         now = _dt.datetime.now().astimezone()
         return now.strftime("%A %d %B %Y, %H:%M:%S %Z")
 
 
-def default_registry(plugin_paths=(), log=print, load_default_dir: bool = True) -> SkillRegistry:
-    """Built-in skills plus plugins from ``plugin_paths`` and ``~/.libra/plugins``."""
-    reg = SkillRegistry()
+def _open_catalog():
+    from . import home
+    from .catalog import Catalog
+
+    return Catalog() if os.path.exists(home.path("catalog.db")) else None
+
+
+def default_registry(plugin_paths=(), log=print, load_default_dir: bool = True, policy=None, confirm=None,
+                     catalog=_open_catalog) -> SkillRegistry:
+    """Built-in skills, plugins from ``plugin_paths`` and ``~/.libra/plugins``, and the skill catalog."""
+    reg = SkillRegistry(catalog=catalog, policy=policy, confirm=confirm)
     _register_builtins(reg)
     for s in _default.list():  # skills registered with @skill outside a plugin load
         reg.register(s)

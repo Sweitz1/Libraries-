@@ -153,6 +153,16 @@ def cmd_chat(args) -> None:
         if line in ("/skills", "/help"):
             print(_skills_help(skills))
             continue
+        if line.startswith("/find "):
+            found = skills.search(line[6:], 10)
+            print("\n".join(_skill_line(s) for s in found) or "(no matching skills)")
+            continue
+        if line.startswith("/info "):
+            try:
+                print(_skill_info(skills, line[6:].strip()))
+            except KeyError as exc:
+                print(f"(skill error: {exc})")
+            continue
         if ws is not None and line.startswith("/") and _workspace_command(ws, line, last_question):
             continue
         call = None
@@ -235,27 +245,47 @@ def cmd_serve(args) -> None:
     model = tok = None
     if ws is None or os.path.exists(os.path.join(args.model, "model.npz")):
         model, tok, _ = checkpoint.load(args.model)
-    skills = _registry(args)
+    skills = _registry(args, interactive=False)  # "ask" skills are refused over HTTP; use libra trust allow
     if ws is not None:
         print(f"grounded: chat answers come from {len(ws.sources)} file(s) in {ws.path}")
     serve(Engine(model, tok, name=args.name, skills=skills, auto_skills=args.auto_skills, workspace=ws),
           args.host, args.port)
 
 
-def _registry(args):
+def _registry(args, interactive: bool = True):
+    """Skills with the trust policy applied. ``interactive``: ask on the terminal for "ask" decisions."""
     from .skills import default_registry
+    from .trust import Policy, console_confirm
 
     if getattr(args, "allow_private", False):
         os.environ["LIBRA_ALLOW_PRIVATE"] = "1"
-    return default_registry(getattr(args, "plugins", None) or [], log=print)
+    confirm = None
+    if getattr(args, "yes", False):
+        confirm = lambda skill, a: True  # noqa: E731  (--yes approves "ask"; "deny" rules still apply)
+    elif interactive and sys.stdin.isatty():
+        confirm = console_confirm
+    return default_registry(getattr(args, "plugins", None) or [], log=print, policy=Policy(), confirm=confirm)
+
+
+def _skill_line(s) -> str:
+    desc = s.description if len(s.description) <= 90 else s.description[:89] + "…"
+    return f"  /{s.name} {s.usage()}".rstrip() + f"  [{s.risk}] — {desc}"
+
+
+def _skill_info(skills, name: str) -> str:
+    s = skills.get(name)
+    decision, reason = skills.policy.decide(s.name, s.risk) if skills.policy else ("allow", "no policy")
+    return "\n".join([f"{s.name}  ({s.source})", f"  {s.description}", f"  usage: /{s.name} {s.usage()}",
+                      f"  risk: {s.risk}; trust: {decision} ({reason})",
+                      "  parameters: " + json.dumps(s.schema()["function"]["parameters"], indent=2).replace(
+                          "\n", "\n  ")])
 
 
 def _skills_help(skills) -> str:
     lines = ["skills (use /name args, or just ask, e.g. \"scrape https://example.com\"):"]
     for s in skills.list():
-        params = " ".join(f"[{p}]" if v.default is not v.empty else f"<{p}>"
-                          for p, v in s.signature().parameters.items())
-        lines.append(f"  /{s.name} {params}".rstrip() + f"  — {s.description}")
+        lines.append(_skill_line(s))
+    lines.append("  /find <words>  — search the skill catalog (MCP tools, API operations); /info <name> for details")
     return "\n".join(lines)
 
 
@@ -263,8 +293,22 @@ def cmd_skill(args) -> None:
     skills = _registry(args)
     if args.action == "list":
         print(_skills_help(skills))
+        if skills.catalog is not None:
+            n = skills.catalog.count()
+            print(f"\ncatalog: {n:,} more skill(s) from {len(skills.catalog.sources())} source(s); "
+                  "search them with: libra skill find <words>")
     elif args.action == "schema":
         print(json.dumps([s.schema() for s in skills.list()], indent=2))
+    elif args.action == "find":
+        query = " ".join([args.name or "", *args.args]).strip()
+        if not query:
+            raise SystemExit("usage: libra skill find <words>")
+        found = skills.search(query, args.limit)
+        print("\n".join(_skill_line(s) for s in found) or "(no matching skills)")
+    elif args.action == "info":
+        if not args.name:
+            raise SystemExit("usage: libra skill info NAME")
+        print(_skill_info(skills, args.name))
     else:
         if not args.name:
             raise SystemExit("usage: libra skill run NAME [ARG ...] [key=value ...]")
@@ -273,6 +317,115 @@ def cmd_skill(args) -> None:
         print(result.text)
         if not result.ok:
             raise SystemExit(1)
+
+
+def cmd_mcp(args) -> None:
+    from . import mcp
+    from .catalog import Catalog
+
+    servers = mcp.load_config()
+    if args.action == "list":
+        if not servers:
+            print("no MCP servers; add one with: libra mcp add NAME -- command args   or   --url URL")
+        counts = dict(Catalog().sources()) if servers else {}
+        for name, cfg in sorted(servers.items()):
+            where = cfg.get("url") or " ".join([cfg.get("command", ""), *cfg.get("args", [])])
+            n = counts.get(f"mcp.{mcp.safe_name(name)}", 0)
+            print(f"  {name}: {where}  ({n} tool(s) in catalog)")
+        return
+    if not args.name:
+        raise SystemExit(f"usage: libra mcp {args.action} NAME")
+    if args.action == "add":
+        cmd = [c for c in args.command if c != "--"]
+        if bool(cmd) == bool(args.url):
+            raise SystemExit("give either a command (after --) or --url")
+        cfg = {"url": args.url} if args.url else {"command": cmd[0], "args": cmd[1:]}
+        if args.header:
+            cfg["headers"] = dict(h.split(":", 1) for h in args.header)
+            cfg["headers"] = {k.strip(): v.strip() for k, v in cfg["headers"].items()}
+        if args.env:
+            cfg["env"] = dict(e.split("=", 1) for e in args.env)
+        servers[args.name] = cfg
+        mcp.save_config(servers)
+        print(f"added MCP server {args.name}; connecting to list its tools…")
+        mcp.sync(args.name)
+        print(f"its tools are new skills named mcp.{mcp.safe_name(args.name)}.<tool> — see: libra skill find <words>")
+    elif args.action == "remove":
+        servers.pop(args.name, None)
+        mcp.save_config(servers)
+        print(f"removed {args.name} and {Catalog().remove_source('mcp.' + mcp.safe_name(args.name))} tool(s)")
+    else:
+        mcp.sync(None if args.name == "all" else args.name)
+
+
+def cmd_api(args) -> None:
+    from . import openapi
+
+    if args.allow_private:
+        os.environ["LIBRA_ALLOW_PRIVATE"] = "1"
+    if args.action == "list":
+        cfg = openapi.load_configs()
+        if not cfg:
+            print("no APIs; import one with: libra api add NAME spec.yaml")
+        for name, c in sorted(cfg.items()):
+            auth = c.get("auth", {}).get("type", "none")
+            print(f"  {name}: {c.get('title', '')} — {c.get('operations', 0)} operation(s), {c['base_url']}, auth: {auth}")
+    elif args.action == "add":
+        if not (args.name and args.spec):
+            raise SystemExit("usage: libra api add NAME SPEC [--base-url URL] [--bearer-env VAR ...]")
+        auth = None
+        if args.bearer_env:
+            auth = {"type": "bearer", "env": args.bearer_env}
+        elif args.header_env:
+            auth = {"type": "header", "name": args.header_env[0], "env": args.header_env[1]}
+        elif args.query_env:
+            auth = {"type": "query", "name": args.query_env[0], "env": args.query_env[1]}
+        elif args.basic_env:
+            auth = {"type": "basic", "env_user": args.basic_env[0], "env_pass": args.basic_env[1]}
+        n = openapi.add_api(args.name, args.spec, args.base_url, auth)
+        print(f"imported {n} operation(s) as api.{openapi.safe_name(args.name)}.<operation>")
+    elif args.action == "add-dir":
+        if not args.name:
+            raise SystemExit("usage: libra api add-dir FOLDER")
+        out = openapi.add_dir(args.name)
+        total = sum(out["imported"].values())
+        print(f"imported {len(out['imported'])} API(s) with {total:,} operation(s); {len(out['failed'])} skipped")
+    else:
+        if not args.name:
+            raise SystemExit("usage: libra api remove NAME")
+        print(f"removed {openapi.remove_api(args.name)} operation(s)")
+
+
+def cmd_trust(args) -> None:
+    from . import home
+    from .trust import Policy
+
+    policy = Policy()
+    if args.action == "list":
+        print("defaults: " + ", ".join(f"{k} = {v}" for k, v in policy.defaults.items()))
+        for target, decision in sorted(policy.rules.items()):
+            print(f"  {target}: {decision}")
+        if not policy.rules:
+            print("  (no rules; add one with: libra trust allow|ask|deny TARGET)")
+    elif args.action == "log":
+        path = home.path("audit.jsonl")
+        if not os.path.exists(path):
+            print("(no skill calls logged yet)")
+            return
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()[-args.n:]
+        for line in lines:
+            e = json.loads(line)
+            status = {True: "ok", False: "failed", None: "-"}[e.get("ok")]
+            print(f"{e['time']}  {e['decision']:<8} {status:<6} {e['skill']}  {json.dumps(e.get('args', {}))[:120]}")
+    else:
+        if not args.target:
+            raise SystemExit(f"usage: libra trust {args.action} TARGET")
+        if args.action == "reset":
+            print("reset" if policy.reset(args.target) else f"no rule for {args.target}")
+        else:
+            policy.set(args.target, args.action)
+            print(f"{args.target}: {args.action}")
 
 
 def cmd_scrape(args) -> None:
@@ -413,11 +566,40 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_serve)
 
     k = sub.add_parser("skill", help="list, describe or run skills (built-in and plugins)")
-    k.add_argument("action", choices=["list", "run", "schema"])
+    k.add_argument("action", choices=["list", "find", "info", "run", "schema"])
     k.add_argument("name", nargs="?")
     k.add_argument("args", nargs="*", help="positional values and/or key=value")
+    k.add_argument("--limit", type=int, default=15, help="find: number of results")
+    k.add_argument("--yes", action="store_true", help="run: approve a skill that would ask (deny rules still apply)")
     _add_skill_flags(k)
     k.set_defaults(func=cmd_skill)
+
+    m = sub.add_parser("mcp", help="connect MCP servers and use their tools as skills")
+    m.add_argument("action", choices=["add", "remove", "list", "sync"])
+    m.add_argument("name", nargs="?")
+    m.add_argument("command", nargs=argparse.REMAINDER, help="add: the command that starts the server, after --")
+    m.add_argument("--url", help="add: Streamable HTTP endpoint instead of a command")
+    m.add_argument("--header", action="append", default=[], help='add: "Name: value" (use ${VAR} for secrets)')
+    m.add_argument("--env", action="append", default=[], help="add: NAME=value for the server process")
+    m.set_defaults(func=cmd_mcp)
+
+    ap = sub.add_parser("api", help="import OpenAPI/Swagger specs: one skill per endpoint")
+    ap.add_argument("action", choices=["add", "add-dir", "remove", "list"])
+    ap.add_argument("name", nargs="?", help="add: short name; add-dir: folder of specs")
+    ap.add_argument("spec", nargs="?", help="add: spec file path or URL (JSON or YAML)")
+    ap.add_argument("--base-url", help="server URL if the spec has none")
+    ap.add_argument("--bearer-env", help="env var holding a bearer token")
+    ap.add_argument("--header-env", nargs=2, metavar=("HEADER", "ENV"), help="send env var ENV in header HEADER")
+    ap.add_argument("--query-env", nargs=2, metavar=("PARAM", "ENV"), help="send env var ENV as query param")
+    ap.add_argument("--basic-env", nargs=2, metavar=("USER_ENV", "PASS_ENV"), help="basic auth from two env vars")
+    ap.add_argument("--allow-private", action="store_true", help="allow local/LAN spec URLs")
+    ap.set_defaults(func=cmd_api)
+
+    tr = sub.add_parser("trust", help="allow, ask or deny skills by name, source or risk level")
+    tr.add_argument("action", choices=["list", "allow", "ask", "deny", "reset", "log"])
+    tr.add_argument("target", nargs="?", help="skill name, source prefix (mcp.github, api.petstore) or read/write/danger")
+    tr.add_argument("-n", type=int, default=20, help="log: number of entries")
+    tr.set_defaults(func=cmd_trust)
 
     kb = sub.add_parser("kb", help="your files as a knowledge base: grounded, cited answers")
     kb.add_argument("action", choices=["add", "ask", "correct", "rule", "rules", "list", "remove", "export"])

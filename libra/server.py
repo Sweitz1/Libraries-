@@ -121,11 +121,18 @@ def make_handler(engine: Engine):
             if path in ("", "/health"):
                 self._json(200, {"status": "ok", "model": engine.name})
             elif path == "/v1/skills":
+                from urllib.parse import parse_qs, urlsplit
+
+                qs = parse_qs(urlsplit(self.path).query)
                 if engine.skills is None:
-                    self._json(200, {"object": "list", "data": []})
+                    found = []
+                elif qs.get("q"):
+                    found = engine.skills.search(qs["q"][0], max(1, min(100, int((qs.get("limit") or ["20"])[0]))))
                 else:
-                    self._json(200, {"object": "list", "data": [
-                        dict(s.schema(), source=s.source) for s in engine.skills.list()]})
+                    found = engine.skills.list()
+                total = engine.skills.catalog.count() if engine.skills and engine.skills.catalog else 0
+                self._json(200, {"object": "list", "catalog_size": total, "data": [
+                    dict(s.schema(), source=s.source, risk=s.risk) for s in found]})
             elif path == "/v1/models":
                 self._json(200, {"object": "list", "data": [
                     {"id": engine.name, "object": "model", "created": 0, "owned_by": "local"}]})
@@ -162,7 +169,7 @@ def make_handler(engine: Engine):
                 self._json(200, out)
             elif path.startswith("/v1/skills/"):
                 name = path[len("/v1/skills/"):]
-                if engine.skills is None or name not in engine.skills:
+                if engine.skills is None or name not in engine.skills:  # built-ins, plugins and the catalog
                     self._error(404, f"unknown skill {name!r}")
                     return
                 args = body.get("arguments", body)
@@ -172,7 +179,9 @@ def make_handler(engine: Engine):
                     except json.JSONDecodeError:
                         self._error(400, "arguments must be JSON")
                         return
-                self._json(200, engine.skills.run(name, args).to_dict())
+                result = engine.skills.run(name, args)
+                blocked = not result.ok and ("needs your approval" in result.text or "is blocked" in result.text)
+                self._json(403 if blocked else 200, result.to_dict())
             elif path == "/v1/chat/completions":
                 messages = body.get("messages")
                 if not isinstance(messages, list) or not messages:

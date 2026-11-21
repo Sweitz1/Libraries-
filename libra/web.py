@@ -139,10 +139,15 @@ class Fetcher:
         wait = self._last.get(host, 0) + self.crawl_delay(url) - time.monotonic()
         if wait > 0:
             time.sleep(wait)
-        req = urllib.request.Request(url, headers={
-            "User-Agent": self.user_agent,
-            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
-        })
+        return self.request("GET", url, {"Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5"})
+
+    def request(self, method: str, url: str, headers: dict | None = None, data: bytes | None = None,
+                raise_for_status: bool = True) -> Response:
+        """Any HTTP method, with the same address checks (robots.txt is only checked by :meth:`get`)."""
+        url = self._check_url(url)
+        host = urlsplit(url).netloc
+        req = urllib.request.Request(url, data=data, method=method.upper(),
+                                     headers={"User-Agent": self.user_agent, **(headers or {})})
         try:
             with self._opener.open(req, timeout=self.timeout) as r:
                 raw = r.read(self.max_bytes + 1)[: self.max_bytes]
@@ -150,7 +155,12 @@ class Fetcher:
                 charset = r.headers.get_content_charset()
                 status, final, headers = r.status, r.geturl(), dict(r.headers.items())
         except urllib.error.HTTPError as exc:
-            raise FetchError(f"HTTP {exc.code} for {url}") from None
+            if raise_for_status:
+                raise FetchError(f"HTTP {exc.code} for {url}") from None
+            raw = exc.read(self.max_bytes)
+            ctype = (exc.headers.get("Content-Type") or "").lower()
+            charset = exc.headers.get_content_charset()
+            status, final, headers = exc.code, url, dict(exc.headers.items())
         except urllib.error.URLError as exc:
             raise FetchError(f"could not fetch {url}: {exc.reason}") from None
         except (TimeoutError, socket.timeout):
