@@ -4,6 +4,9 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+### Documentation
+- **INSTALL.md**: an eight-lesson course for installing Libra's servers and apps (your computer, a rehearsal of the Debian installer, the service, Tailscale, the home-screen and Android apps, pairing, OpenAI-compatible apps, the Java client, Discord, upkeep and troubleshooting). `tests/test_learn.py` keeps its links, commands and installer options real.
+
 ### Security
 - Web fetches ignore `HTTP(S)_PROXY` unless `LIBRA_USE_PROXY=1` marks the proxy as trusted. Through an untrusted proxy, a name only the proxy could resolve (an internal host) got past the private-address check. Even with a trusted proxy, names that don't resolve locally are refused.
 - `libra data --url` and `--gutenberg` downloads now use the guarded fetcher (they had no private-address check); `libra data --allow-private` covers them.
