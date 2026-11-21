@@ -13,7 +13,7 @@ compatibility: Requires bash, git and Python 3.9+. The java check needs Maven an
 - **`scripts/verify.sh`**: runs the checks, chosen from the files changed since `origin/main` plus uncommitted ones. Use `--only python,docs`, `--all`, or `--help` for the options. It prints one JSON line per check (`check`, `status`, `seconds`, `detail`, `log`) and a `summary` line on stdout, with progress on stderr.
 
   | Check | What it runs |
-  |---|---|
+  | `python` | the unit tests (also after changes to `scripts/` or `.claude/skills/`, which `tests/test_skill_scripts.py` covers) |
   | `python` | the unit tests |
   | `smoke` | `.github/smoke.sh` |
   | `java` | `clients/java` with Maven, including the live test against a real `libra serve` it starts |

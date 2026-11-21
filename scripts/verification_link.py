@@ -189,7 +189,9 @@ def investigation_page(sha, info, date, subject):
          "| H7 | No path reaches outside its folder | job ids, `libra kb add`, translation files, the static file table | `jobs.py` `_dir`, " + f("libra/knowledge.py") + " |",
          "| H8 | A checkpoint can't run code when loaded | a crafted `model.npz` (pickled objects), a huge `config.json` | " + f("libra/checkpoint.py") + " `load` (NumPy's `allow_pickle` default is off) |",
          "| H9 | One client can't exhaust the server | slow bodies, many connections, long generations, huge messages, pathological regex input to the planner | `server.py` `LibraHTTPServer`, `Engine.acquire`, " + f("libra/agent.py") + " |",
-         "| H10 | An interrupted job never repeats a change by itself | `kill -9` during a write step, then resume, then the agent timer | `jobs.py` `_recover`, `tests/test_jobs.py` |",
+         "| H10 | An interrupted job never repeats a change by itself, unless the skill's read-only `reconcile` says it hadn't happened | `kill -9` during a write step, then resume, then the agent timer; a `reconcile` that raises or returns odd values | `jobs.py` `_recover`, `_reconcile`, `tests/test_jobs.py` |",
+         "| H11 | An approval covers one exact operation, once | change the arguments, the `{prev}` output, the skill or the risk after approving; replay an approval; approve a time-limit pause and watch the next change | `jobs.py` `_operation`, `_approved`, `approve` |",
+         "| H12 | The web app's session cookie can't be used by another site or outlive its sign-in | a cross-site form or `fetch` with the cookie; no or wrong `Origin`; reuse after sign-out, device revocation or a new main token; a token placed in the cookie | `server.py` `_authorized`, `_same_site`, " + f("libra/sessions.py") + " |",
          "", "## Not verified at all", "",
          "These were never run for real, so anything here is open ground:",
          "a Debian deployment under systemd, Tailscale, Discord's real servers, a GPU, the Android app on a device,",
@@ -206,11 +208,19 @@ def investigation_page(sha, info, date, subject):
          f"  https://raw.githubusercontent.com/{REPO}/main/docs/INVESTIGATE.md",  # committed after the commit it describes
          "and the responses to earlier reviews (sections 9-12) here:",
          f"  {raw}/docs/REVIEW.md",
-         "Try to break each hypothesis H1-H10. For each, say: broken (with the file, line and a concrete input),",
+         "Try to break each hypothesis H1-H12. For each, say: broken (with the file, line and a concrete input),",
          "holds (what you checked), or not checked. Don't report a listed residual risk unless you show an exploit",
          "or a fix. Say clearly which results come from reading the code and which you ran.",
          "```", ""]
     return "\n".join(L)
+
+
+def _share(out: str) -> None:
+    """The page is committed after the commit it describes, so it's shared from main, and only if it's in
+    the repository (a page written elsewhere has no link)."""
+    rel = os.path.relpath(os.path.abspath(out), ROOT)
+    if not rel.startswith(".."):
+        print(f"share: https://github.com/{REPO}/blob/main/{rel.replace(os.sep, '/')}", file=sys.stderr)
 
 
 def main(argv):
@@ -254,7 +264,7 @@ def main(argv):
             with open(out, "w", encoding="utf-8") as f:
                 f.write(text)
             print(f"wrote {out} for {sha[:7]}", file=sys.stderr)
-            print(f"share: https://github.com/{REPO}/blob/main/{os.path.relpath(os.path.abspath(out), ROOT)}", file=sys.stderr)
+            _share(out)
         else:
             print(text)
         return 0
@@ -271,8 +281,8 @@ def main(argv):
         print(f"wrote {out} for {sha[:7]}", file=sys.stderr)
     else:
         print(text)
-    if out:  # the page is committed after the commit it describes, so share it from main
-        print(f"share: https://github.com/{REPO}/blob/main/{os.path.relpath(os.path.abspath(out), ROOT)}", file=sys.stderr)
+    if out:
+        _share(out)
     if ci and any(run["status"] != "completed" for run in ci):
         print("note: CI is still running for this commit; run it again when it finishes", file=sys.stderr)
         return 4
