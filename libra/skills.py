@@ -445,6 +445,28 @@ def _truncate(text: str, max_chars: int) -> str:
     return text if len(text) <= max_chars else text[:max_chars].rstrip() + f"\n… ({len(text) - max_chars:,} more characters)"
 
 
+def extractive_summary(text: str, n: int = 3) -> str:
+    """The ``n`` sentences that best cover the text's frequent words, in their original order."""
+    from collections import Counter
+
+    from .knowledge import sentences, terms
+
+    sents = [s for s in sentences(re.sub(r"(?m)^#+\s*", "", text)) if len(s.split()) >= 5]
+    if len(sents) <= n:
+        return " ".join(sents) or text.strip()[:500]
+    freq = Counter(t for s in sents for t in set(terms(s)))
+    top = max(freq.values())
+    scored = []
+    for i, s in enumerate(sents):
+        words = terms(s)
+        if not words:
+            continue
+        score = sum(freq[w] / top for w in set(words)) / (len(set(words)) ** 0.5)
+        scored.append((score - 0.02 * i, i))  # slight preference for earlier sentences
+    keep = sorted(i for _, i in sorted(scored, reverse=True)[:n])
+    return " ".join(sents[i] for i in keep)
+
+
 def _register_builtins(reg: SkillRegistry) -> None:
     @reg.skill("scrape", "Download a web page and extract its title, text, tables or CSS-selected elements.",
                {"url": "page to read", "select": "optional CSS selector(s), comma separated",
@@ -533,6 +555,11 @@ def _register_builtins(reg: SkillRegistry) -> None:
         from .lang import romanize as rz
 
         return rz(text)
+
+    @reg.skill("summarize", "Shorten a text to its most important sentences (taken word for word from it).",
+               {"text": "the text to summarize", "sentences": "how many sentences to keep"}, risk="read")
+    def summarize(text: str, sentences: int = 3):
+        return extractive_summary(text, sentences)
 
     @reg.skill("time", "Current local date and time.", router=_route_time, risk="read")
     def time_skill():

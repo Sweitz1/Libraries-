@@ -23,10 +23,12 @@ The only dependency is **NumPy**. Everything else is in this repo:
 | `libra/trust.py` | Risk levels, allow/ask/deny rules, confirmation prompts, audit log |
 | `libra/translate.py`, `libra/lang.py` | Translation memory, IBM Model 1 alignment, adaptation, glossing, pivoting; language detection and romanization |
 | `libra/webui/` | The phone/browser app served at `/` (no external files; works offline on your network) |
-| `deploy/` | Debian installer (systemd service, nightly training timer, token), Caddy HTTPS example, setup guide |
+| `libra/agent.py` | Goal agent: plans plain-language goals into skill steps, runs them under trust rules and limits, schedules |
+| `libra/qr.py`, `libra/pair.py` | QR codes (from scratch) and phone pairing: best address + token as a scannable link |
+| `deploy/` | Debian installer (systemd services and timers, Tailscale, .local name, token, QR pairing), Caddy HTTPS example, setup guide |
 | `libra/auto.py` | Unattended collect → filter → train → gate → report runs, with locking, limits, rollback and scheduling |
 | `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
-| `libra/cli.py` | `libra data / train / auto / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
+| `libra/cli.py` | `libra data / train / auto / agent / pair / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -36,9 +38,14 @@ Each operation in the autograd engine, and the full model, is checked against nu
 sudo ./deploy/install-debian.sh
 ```
 
-This installs Libra as a service (it starts at boot, runs nightly training, and requires a token) and prints a link to open on your phone. The app has Chat (your files or the model), Translate, Skills and Training tabs, and can be added to the home screen. **[deploy/README.md](deploy/README.md)** covers adding your files, switching on training, and safe access away from home with Tailscale or HTTPS.
+This installs Libra as a service. It starts at boot, runs nightly training and scheduled agent goals, requires a token, and shows up on your Wi-Fi as `http://<machine>.local:8000`. At the end it prints a **QR code: scan it with your phone's camera** and the app opens already signed in.
 
-![The Libra app on a phone](docs/phone-chat.png)
+- **Away from home:** add `--tailscale` (or `--tailscale-only`). The installer sets up Tailscale and serves Libra at `https://libra.<your-tailnet>.ts.net`.
+- **The app** has Chat (your files or the model), Translate, Skills, Agent and Training tabs, plus a *Pair* button that shows a QR code for adding your other devices. It installs to the home screen with its own icon.
+
+**[deploy/README.md](deploy/README.md)** covers the rest.
+
+<p><img src="docs/phone-chat.png" alt="Chat in the Libra app" width="260"> <img src="docs/phone-agent.png" alt="The Agent tab" width="260"></p>
 
 ## Install
 
@@ -163,6 +170,7 @@ No scheduler available? `libra auto run libra-auto.json --loop --every 24` keeps
   "sources": [
     {"crawl": "https://example.com/docs/", "max_pages": 100, "depth": 2, "include": "", "exclude": ""},
     {"feed": "https://example.com/blog/feed.xml", "max_items": 20},
+    {"sitemap": "https://example.com/sitemap.xml", "max_pages": 50},
     {"url": "https://example.com/about"},
     {"gutenberg": 1342},
     {"files": "~/my-notes"}
@@ -173,8 +181,10 @@ No scheduler available? `libra auto run libra-auto.json --loop --every 24` keeps
   "steps_per_run": 2000,
   "filters": {"min_chars": 300, "language": "en", "max_symbol_ratio": 0.25, "mask_personal_info": true},
   "limits": {"max_pages_per_run": 300, "max_dataset_mb": 500, "max_minutes": 120, "min_free_disk_mb": 2000,
-             "delay_seconds": 1.0},
-  "gate": {"holdout_fraction": 0.05, "max_regression": 0.02}
+             "delay_seconds": 1.0, "retries": 2, "retry_delay_seconds": 5},
+  "gate": {"holdout_fraction": 0.05, "max_regression": 0.02},
+  "discover": true,
+  "notify": {"url": "", "on": "changes"}
 }
 ```
 
@@ -187,7 +197,10 @@ Relative paths are relative to the config file. YAML configs (`.yaml`) work too.
    - Crawls obey robots.txt and wait between requests.
    - A page budget caps each run.
    - Pages that haven't changed since last time are skipped.
-   - Feeds (RSS and Atom) bring in new posts as they appear.
+   - Feeds (RSS and Atom) bring in new posts as they appear, and sitemaps (including sitemap indexes) list a site's pages, newest first.
+   - **New sources are found automatically** (`"discover": true`). For every crawled site, Libra reads the sitemaps listed in its robots.txt (or `/sitemap.xml`) and the RSS/Atom feeds its pages link to, re-checking weekly. The report lists what it found.
+   - **Temporary errors are retried** (timeouts, connection drops, HTTP 429 and 5xx) with growing pauses. A 404 or a robots.txt block is not retried.
+   - A page that appears in both a crawl and a sitemap is fetched only once.
 3. **Filters** each document:
    - It removes boilerplate lines (cookie banners, "share on", "sign in", copyright footers) and stray fragments.
    - It drops documents that are too short, mostly symbols or numbers, in the wrong language, repetitive, or duplicates.
@@ -195,7 +208,7 @@ Relative paths are relative to the config file. YAML configs (`.yaml`) work too.
    - The report counts every drop by reason.
 4. **Trains a copy** of the current model, or a new one on the first run, for `steps_per_run` steps within `max_minutes`. Your current model is never touched while this happens.
 5. **Gates the result.** One in 20 kept documents (`holdout_fraction`) goes to a held-out set that is never trained on. The old and new models are both scored on it, and the new one replaces the old only if it's no worse than `max_regression` allows (2% by default). Otherwise it's set aside in `checkpoints/auto.rejected`. The replaced model stays in `checkpoints/auto.previous` for `rollback`.
-6. **Reports** to `datasets/auto/.auto/last-report.md` (and appends to `runs.jsonl`):
+6. **Reports** to `datasets/auto/.auto/last-report.md` (and appends to `runs.jsonl`). While it runs, it writes live progress (phase, pages, training step and loss), which the app's Training tab shows as a progress bar.
 
 ```
 - pages fetched: 10 (unchanged since last time: 0)
@@ -205,11 +218,53 @@ Relative paths are relative to the config file. YAML configs (`.yaml`) work too.
 - decision: kept the new model (held-out loss did not get worse)
 ```
 
+### Notifications on your phone
+
+Set `"notify": {"url": "https://ntfy.sh/<a-long-random-topic>", "on": "changes"}` and install the free [ntfy](https://ntfy.sh) app subscribed to that topic. Libra then sends each run's report as a push notification. Any webhook URL that accepts a POST works too, including your own ntfy server. Choose `"on"`:
+- `"always"`: every run.
+- `"changes"`: when a new model is kept, or something failed.
+- `"failures"`: only when something failed.
+
+The app can also notify you itself when a run finishes while it's open in the background (over HTTPS, e.g. through Tailscale).
+
+On the Debian service, a failed run (network down, disk full) is retried up to 3 times, 20 minutes apart.
+
 ### What still needs you
 
 - **Pick the sources.** Choose sites you trust and whose terms allow training on their text: your own sites, documentation you have rights to, public-domain books. Crawling the open web at random mostly teaches junk.
 - **Glance at the report** now and then. The gate catches a model getting worse; it can't tell you whether the text was what you wanted.
 - **Expect gradual progress.** On a 4-core computer the default model trains at about 2,500 tokens/s, so each nightly run moves it a little. See *Minimum resources* for sizes and speeds.
+
+## Goal agent: plain-language goals, run with your skills
+
+```bash
+libra agent plan "scrape https://example.com/news then summarize it in 3 sentences then translate it to Spanish"
+libra agent run  "list the links on https://example.com/blog then scrape each of them then summarize it"
+libra agent add morning "scrape https://example.com/news then summarize it" --every daily@07:00
+libra agent list            # saved goals, their schedules and last results
+libra agent runs            # recent runs
+```
+
+The app's **Agent** tab does the same: preview a plan, run it, save and schedule goals, and read past runs.
+
+**How it plans.** Libra's own model is too small to plan reliably, so the agent plans with rules and search:
+1. The goal is split at "then", "and then", ";", new lines, or "and" before an action word.
+2. Each part is matched to a skill:
+   - phrases with a fixed meaning: *summarize*, *translate … to <language>*, *detect the language*
+   - the skills' own triggers: scrape, crawl or list links with a URL, calculations, the time
+   - otherwise a search across every skill (built-ins, plugins, the MCP/API catalog), accepted only if the skill's name and description cover at least half of the part's key words
+3. Words like *it*, *them* or *the result* pass the previous step's output along.
+4. *each of them*, or several URLs in one step, runs that step once per item (up to `--max-items`, default 5).
+5. If a part matches nothing clearly, the plan is refused with the reason. It never guesses. Always check `libra agent plan` first.
+
+**How it runs.** Every step goes through the trust controls, like any other skill:
+- Read-only skills run.
+- Skills that change something ask first in the terminal. In scheduled runs and in the app, nobody can be asked, so they're refused with the exact `libra trust allow …` command.
+- Runs stop at `--max-steps` (10) and `--max-minutes` (5).
+
+Schedules: `hourly`, `daily`, `weekly`, `30m`, `6h`, `daily@07:00`, `weekdays@08:30` or `weekly@09:00`. The Debian service checks for due goals every 5 minutes. Elsewhere, run `libra agent run-due` from cron.
+
+New built-in skill: **`summarize`** keeps the sentences that best cover a text's main words, quoted exactly, in their original order.
 
 ## Your files as a knowledge base (grounded answers)
 
@@ -278,6 +333,7 @@ Built-in skills:
 | `crawl` | Same-site crawl that obeys robots.txt and waits between requests; optional `out=pages.jsonl` |
 | `links` | Links on a page, optionally filtered |
 | `calc` | Exact arithmetic. It parses the expression and never executes code |
+| `summarize` | The text's most important sentences, quoted exactly |
 | `translate`, `detect_language`, `romanize` | Translation from your own data, language detection, Latin transliteration (see *Translation*) |
 | `time` | Local date and time |
 

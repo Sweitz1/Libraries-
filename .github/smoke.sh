@@ -16,4 +16,10 @@ libra trust list
 libra translate add examples/phrasebook_en_es.tsv --src en --tgt es
 libra translate align --src en --tgt es
 libra translate text "Where is the hotel?" --to es
+libra agent plan "what is (2+3)*4 then translate it to Spanish"
+libra agent run "what is (2+3)*4"
+libra agent add sum "what is 6*7" --every hourly
+libra agent run-due
+libra pair --url http://192.0.2.1:8000 --token-file /dev/null
 ./deploy/install-debian.sh --root "$work/install-root" --port 8799
+./deploy/install-debian.sh --root "$work/install-root" --tailscale --port 8799

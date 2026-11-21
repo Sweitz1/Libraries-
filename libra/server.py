@@ -27,7 +27,10 @@ from .generate import SamplingParams, stream_text
 WEBUI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "webui")
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
-          "/icon.svg": ("icon.svg", "image/svg+xml")}
+          "/icon.svg": ("icon.svg", "image/svg+xml"), "/icon-192.png": ("icon-192.png", "image/png"),
+          "/icon-512.png": ("icon-512.png", "image/png"), "/icon-maskable-512.png": ("icon-maskable-512.png", "image/png"),
+          "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"), "/favicon-32.png": ("favicon-32.png", "image/png"),
+          "/favicon.ico": ("favicon-32.png", "image/png")}
 OPEN_PATHS = {"/health", *STATIC}
 MAX_BODY = 2_000_000
 MAX_DRAIN = 16_000_000  # bodies bigger than this are cut off without reading
@@ -42,6 +45,8 @@ class Engine:
         self.model_dir: str | None = None  # set to reload the model when a new one is trained
         self._model_mtime = 0.0
         self.auto_thread: threading.Thread | None = None
+        self.agent_thread: threading.Thread | None = None
+        self.agent_current: dict = {}
         self.auto_last: dict = {}
         self._fails: dict[str, list] = {}
         self._fails_lock = threading.Lock()
@@ -210,6 +215,52 @@ def make_handler(engine: Engine):
                                 "running": bool(engine.auto_thread and engine.auto_thread.is_alive())}
             return info
 
+        def _agent_post(self, action: str, body: dict) -> None:
+            from . import agent
+
+            if engine.skills is None:
+                self._error(404, "this server has no skills")
+                return
+            try:
+                if action == "plan":
+                    self._json(200, agent.plan(str(body.get("goal", "")), engine.skills).to_dict())
+                elif action == "goals":
+                    p = agent.add_goal(str(body.get("name", "")), str(body.get("goal", "")), body.get("every") or None,
+                                       engine.skills)
+                    self._json(200, {"saved": True, "plan": p.to_dict()})
+                elif action == "remove":
+                    self._json(200, {"removed": agent.remove_goal(str(body.get("name", "")))})
+                elif action == "run":
+                    if engine.agent_thread and engine.agent_thread.is_alive():
+                        self._error(409, "the agent is already running a goal")
+                        return
+                    name = str(body.get("name") or "")
+                    goal = str(body.get("goal") or "")
+                    if name:
+                        goals = agent.load_goals()
+                        if name not in goals:
+                            self._error(404, f"no saved goal {name!r}")
+                            return
+                        goal = goals[name]["goal"]
+                    p = agent.plan(goal, engine.skills)
+                    if not p.ok:
+                        self._json(200, {"started": False, "plan": p.to_dict()})
+                        return
+
+                    def work():
+                        steps = []
+                        engine.agent_current = {"goal": goal, "name": name, "steps": steps}
+                        r = agent.execute(p, engine.skills, name=name, log=steps.append)
+                        agent.record(r)
+
+                    engine.agent_thread = threading.Thread(target=work, daemon=True)
+                    engine.agent_thread.start()
+                    self._json(202, {"started": True, "plan": p.to_dict()})
+                else:
+                    self._error(404, f"unknown agent action {action!r}")
+            except ValueError as exc:
+                self._error(400, str(exc))
+
         def _auto_run(self, dry_run: bool) -> None:
             if not engine.auto_config:
                 self._error(404, "server was started without --auto-config")
@@ -261,6 +312,25 @@ def make_handler(engine: Engine):
                 self._json(200, {"status": "ok", "model": engine.name})
             elif path == "/v1/info":
                 self._json(200, self._info())
+            elif path == "/v1/agent":
+                from . import agent
+
+                running = bool(engine.agent_thread and engine.agent_thread.is_alive())
+                self._json(200, {"goals": agent.load_goals(), "runs": agent.recent_runs(15),
+                                 "running": running, "current": engine.agent_current if running else {}})
+            elif path == "/v1/pair":
+                # a link + QR code for adding another device; the base is the address this device used
+                from urllib.parse import parse_qs, urlsplit
+
+                from .pair import link, qr_svg
+
+                base = (parse_qs(urlsplit(self.path).query).get("base") or [""])[0]
+                parts = urlsplit(base)
+                if parts.scheme not in ("http", "https") or not parts.netloc or parts.path not in ("", "/"):
+                    self._error(400, "base must be the app's address, like https://libra.example.ts.net")
+                    return
+                url = link(f"{parts.scheme}://{parts.netloc}", engine.token)
+                self._json(200, {"url": url, "svg": qr_svg(url)})
             elif path == "/v1/auto/status":
                 if not engine.auto_config:
                     self._error(404, "server was started without --auto-config")
@@ -272,7 +342,15 @@ def make_handler(engine: Engine):
                 except Exception as exc:
                     text = f"(could not read status: {exc})"
                 running = bool(engine.auto_thread and engine.auto_thread.is_alive())
-                self._json(200, {"running": running, "status": text, "last": engine.auto_last})
+                try:
+                    prog = auto.progress(engine.auto_config)
+                except Exception:
+                    prog = {}
+                try:
+                    running = running or auto.is_running(engine.auto_config)  # e.g. the nightly timer's run
+                except Exception:
+                    pass
+                self._json(200, {"running": running, "status": text, "last": engine.auto_last, "progress": prog})
             elif path == "/v1/skills":
                 from urllib.parse import parse_qs, urlsplit
 
@@ -330,6 +408,9 @@ def make_handler(engine: Engine):
                     self._error(400, str(exc))
                     return
                 self._json(200, dict(result.to_dict(), display=result.describe()))
+                return
+            if path.startswith("/v1/agent/"):
+                self._agent_post(path[len("/v1/agent/"):], body)
                 return
             if path == "/v1/auto/run":
                 self._auto_run(bool(body.get("dry_run")))

@@ -101,7 +101,8 @@ def estimate_loss(model: GPT, data: np.ndarray, cfg: TrainConfig, rng: np.random
     return float(np.mean(losses))
 
 
-def train(cfg: TrainConfig, log=print) -> GPT:
+def train(cfg: TrainConfig, log=print, progress=None) -> GPT:
+    """Train per ``cfg``. ``progress(step, total_steps, loss)`` is called at each log interval if given."""
     log(f"device: {B.use(cfg.device)}")
     ag.seed(cfg.seed)
     rng = np.random.default_rng(cfg.seed)
@@ -161,6 +162,8 @@ def train(cfg: TrainConfig, log=print) -> GPT:
         if step % cfg.log_every == 0 or step == cfg.steps - 1:
             rate = tokens_seen / max(1e-9, time.time() - t0)
             log(f"step {step:5d} | loss {loss.item():.4f} | lr {lr:.2e} | grad {norm:.2f} | {rate:,.0f} tok/s")
+            if progress:
+                progress(step + 1, cfg.steps, loss.item())
 
         out_of_time = bool(cfg.max_seconds) and time.time() - t0 > cfg.max_seconds
         last = step == cfg.steps - 1 or out_of_time

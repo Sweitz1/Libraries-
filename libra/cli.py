@@ -574,6 +574,89 @@ def cmd_auto(args) -> None:
             print("Windows (Command Prompt):\n  " + lines["windows"])
 
 
+def cmd_agent(args) -> None:
+    from . import agent
+
+    a, items = args.action, args.items
+    if a in ("plan", "run"):
+        goal = " ".join(items)
+        if not goal:
+            raise SystemExit(f'usage: libra agent {a} "your goal"')
+        skills = _registry(args)
+        p = agent.plan(goal, skills)
+        print(p.describe())
+        if a == "plan" or not p.ok:
+            if not p.ok:
+                raise SystemExit(1)
+            return
+        print()
+        r = agent.execute(p, skills, args.max_steps, args.max_items, args.max_minutes * 60,
+                          log=lambda m: print("… " + m))
+        agent.record(r)
+        print("\n" + r.describe())
+        if r.status != "done":
+            raise SystemExit(1)
+    elif a == "add":
+        if len(items) < 2:
+            raise SystemExit('usage: libra agent add NAME "goal" [--every daily@07:00]')
+        p = agent.add_goal(items[0], " ".join(items[1:]), args.every, _registry(args, interactive=False))
+        print(p.describe())
+        print(f"\nsaved as {items[0]!r}" + (f", runs {args.every}" if args.every else " (run it with: libra agent "
+                                                                                     f"start {items[0]})"))
+    elif a == "start":
+        goals = agent.load_goals()
+        if not items or items[0] not in goals:
+            raise SystemExit(f"unknown goal; saved goals: {', '.join(sorted(goals)) or 'none'}")
+        r = agent.run_goal(goals[items[0]]["goal"], _registry(args), name=items[0], log=lambda m: print("… " + m),
+                           max_steps=args.max_steps, max_items=args.max_items, max_seconds=args.max_minutes * 60)
+        print("\n" + r.describe())
+    elif a == "list":
+        goals = agent.load_goals()
+        if not goals:
+            print('no saved goals (libra agent add NAME "goal" --every daily@07:00)')
+        for name, g in sorted(goals.items()):
+            last = g.get("last_run") or "never"
+            print(f"  {name}: {g['goal']}\n      every: {g.get('every') or 'manual'}; last run: {last}"
+                  f"{' (' + g['last_status'] + ')' if g.get('last_status') else ''}")
+    elif a == "remove":
+        print("removed" if items and agent.remove_goal(items[0]) else "no such goal")
+    elif a == "runs":
+        for r in agent.recent_runs(args.n):
+            print(f"{r['started']}  {r['status']:<8} {r.get('name') or '-':<12} {r['goal'][:70]}")
+    elif a == "run-due":
+        for r in agent.run_due(_registry(args, interactive=False)):
+            print(f"{r.name}: {r.status}")
+
+
+def cmd_pair(args) -> None:
+    from . import pair
+
+    token = None
+    if args.token_file:
+        with open(args.token_file, encoding="utf-8") as f:
+            token = f.read().strip()
+    elif os.environ.get("LIBRA_TOKEN"):
+        token = os.environ["LIBRA_TOKEN"]
+    else:
+        from . import home
+
+        path = home.path("server-token")
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                token = f.read().strip()
+    bases = [(pair.describe(u), u) for u in args.url] or pair.candidate_urls(args.port, args.local_only)
+    if not bases:
+        raise SystemExit("no address found to pair with; pass --url https://… or http://<ip>:<port>")
+    best = pair.link(bases[0][1], token)
+    print(f"Scan with your phone's camera ({bases[0][0]}):\n")
+    print(pair.qr_terminal(best))
+    print(f"\n  {best}")
+    for label, base in bases[1:]:
+        print(f"  {pair.link(base, token)}   ({label})")
+    if not token:
+        print("\n(no token found: these links work only if the server runs with --no-auth)")
+
+
 def cmd_scrape(args) -> None:
     from .web import Fetcher, scrape, to_markdown
 
@@ -782,6 +865,25 @@ def build_parser() -> argparse.ArgumentParser:
     au.add_argument("--at", default="02:30", help="schedule: daily time HH:MM")
     au.add_argument("--install", action="store_true", help="schedule: add it to your crontab (Linux/macOS)")
     au.set_defaults(func=cmd_auto)
+
+    ag = sub.add_parser("agent", help="give a goal in plain words; Libra plans the steps and runs your skills")
+    ag.add_argument("action", choices=["plan", "run", "add", "start", "list", "remove", "runs", "run-due"])
+    ag.add_argument("items", nargs="*", help="the goal (plan/run), or NAME and goal (add), or NAME (start/remove)")
+    ag.add_argument("--every", help="add: hourly, daily, weekly, 30m, 6h, daily@07:00, weekdays@08:30, weekly@09:00")
+    ag.add_argument("--max-steps", type=int, default=10)
+    ag.add_argument("--max-items", type=int, default=5, help="most items one 'each of them' step goes through")
+    ag.add_argument("--max-minutes", type=float, default=5)
+    ag.add_argument("-n", type=int, default=20, help="runs: how many")
+    ag.add_argument("--yes", action="store_true", help="approve skills that would ask (deny rules still apply)")
+    _add_skill_flags(ag)
+    ag.set_defaults(func=cmd_agent)
+
+    pr = sub.add_parser("pair", help="show a QR code to open the app on your phone, already signed in")
+    pr.add_argument("--port", type=int, default=8000)
+    pr.add_argument("--url", action="append", default=[], help="address to use instead of the detected ones")
+    pr.add_argument("--token-file", help="token file (default: LIBRA_TOKEN or ~/.libra/server-token)")
+    pr.add_argument("--local-only", action="store_true", help="only offer the Tailscale HTTPS address")
+    pr.set_defaults(func=cmd_pair)
 
     w = sub.add_parser("scrape", help="extract text, tables, links or CSS-selected elements from a web page")
     w.add_argument("url")
