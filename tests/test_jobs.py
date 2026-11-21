@@ -487,6 +487,63 @@ class JobsTest(unittest.TestCase):
         newest = jobs.listing(1)[0]
         self.assertEqual((newest["name"], newest["status"]), ("digest", "done"))  # a job: durable, with history
 
+    def test_a_full_disk_after_a_change_does_not_repeat_it(self):
+        import errno
+        from unittest import mock
+
+        from libra import jobs
+
+        reg = build_registry(self.state, allow_send=True)
+        job = jobs.create(GOAL, reg)
+        real = jobs._save
+
+        def full_disk(j):
+            if j["steps"][2]["status"] == "done":  # the report went out, but recording that fails
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real(j)
+
+        with mock.patch.object(jobs, "_save", full_disk), self.assertRaises(OSError):
+            jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual(calls(self.state, "send"), ["3"])
+        job = jobs.run(job["id"], reg, retry_delay=0)  # space freed, runner restarted
+        self.assertEqual((job["status"], job["waiting"]["kind"]), ("waiting", "interrupted"))
+        self.assertEqual(calls(self.state, "send"), ["3"])  # not sent twice
+
+    def test_a_journal_that_cannot_be_written_stops_the_job_before_it_acts(self):
+        import errno
+        from unittest import mock
+
+        from libra import jobs
+
+        reg = build_registry(self.state, allow_send=True)
+        job = jobs.create(GOAL, reg)
+        with mock.patch.object(jobs.os, "fsync", side_effect=OSError(errno.EIO, "I/O error")), \
+                self.assertRaises(OSError):
+            jobs.run(job["id"], reg, retry_delay=0)
+        self.assertEqual(calls(self.state, "collect") + calls(self.state, "send"), [])  # fail closed
+
+    def test_a_damaged_job_is_reported_not_hidden(self):
+        from libra import jobs
+
+        reg = build_registry(self.state, allow_send=True)
+        broken = jobs.create(GOAL, reg)["id"]
+        odd = jobs.create(GOAL, reg)["id"]
+        fine = jobs.create(GOAL, reg)["id"]
+        with open(os.path.join(jobs._dir(broken), "job.json"), "w") as f:
+            f.write('{"id": "x", "steps": [')  # cut off
+        with open(os.path.join(jobs._dir(odd), "job.json"), "w") as f:
+            f.write("{}")  # valid JSON, not a job
+        for job_id in (broken, odd):
+            with self.assertRaises(jobs.DamagedJob) as cm:
+                jobs.get(job_id)
+            self.assertIn(os.path.join(jobs._dir(job_id), "job.json"), str(cm.exception))
+            for action in (lambda: jobs.run(job_id, reg), lambda: jobs.approve(job_id)):
+                with self.assertRaises(jobs.DamagedJob):
+                    action()
+        listed = {j["id"]: j["status"] for j in jobs.listing()}
+        self.assertEqual(listed, {broken: "damaged", odd: "damaged", fine: "queued"})
+        self.assertEqual([j["id"] for j in jobs.resume_all(reg, retry_delay=0)], [fine])  # the rest carry on
+
     def test_cancel_and_time_limit(self):
         from libra import jobs
 
@@ -717,6 +774,16 @@ class JobsServerTest(unittest.TestCase):
         self.assertEqual(job["approvals"][0]["by"], "owner")
         self.assertEqual(self.req(f"/v1/jobs/{job_id}/approve", {})[0], 409)  # not waiting any more
         self.assertEqual(self.req("/v1/jobs/20990101-000000-abcdef")[0], 404)
+        from libra import jobs
+
+        with open(os.path.join(jobs._dir(job_id), "job.json"), "w") as f:
+            f.write("{")  # damaged on disk
+        status, _, out = self.req(f"/v1/jobs/{job_id}")
+        self.assertEqual(status, 500)
+        self.assertIn("can't be read", out["error"]["message"])  # not "n must be a number"
+        self.assertEqual(self.req(f"/v1/jobs/{job_id}/approve", {})[0], 500)
+        self.assertEqual(self.req("/v1/jobs")[2]["jobs"][0]["status"], "damaged")
+        self.assertEqual(self.req("/v1/jobs?n=lots")[0], 400)
         self.assertEqual(self.req("/v1/jobs/../../etc")[0], 404)
 
     def test_cors_only_for_configured_origins(self):

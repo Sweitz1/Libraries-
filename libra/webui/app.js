@@ -385,7 +385,8 @@ async function loadAgent() {
       row.append(act("approve", j.waiting.kind === "limit" ? "Continue" : j.waiting.kind === "interrupted" ? "Run it again" : "Approve"));
       if (j.waiting.kind !== "limit") row.append(act("skip", "Skip step", "secondary"));
     }
-    if (!["done", "failed", "cancelled", "needs_review"].includes(j.status)) row.append(act("cancel", "Cancel", "secondary"));
+    if (j.status === "damaged") card.append(el("p", { class: "muted", text: j.error }));
+    if (!["done", "failed", "cancelled", "needs_review", "damaged"].includes(j.status)) row.append(act("cancel", "Cancel", "secondary"));
     row.append(el("button", { class: "btn small secondary", text: "Details", onclick: async () => {
       try {
         const full = await json(`/v1/jobs/${j.id}`);

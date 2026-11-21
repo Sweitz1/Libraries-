@@ -27,6 +27,7 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 - **Autonomous goals run as durable jobs**, and those jobs adjust their own plan when the result misses the goal's wording (at most twice, read-only skills within the goal's permissions), then learn the plan that worked. Saved autonomous goals and the app's Autonomous button now survive restarts, pause for approval, and keep to their permissions and pre-approvals. Before, a pre-approved change stopped them.
 
 ### Fixed
+- A damaged job file (cut off, or not a job) was hidden from `libra jobs list` and the app, and failed with a raw JSON error; the server answered "n must be a number". It's now listed as `damaged`, with the file's path, and resuming carries on with the other jobs.
 - A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
 - A sign-in link opened in a tab that already showed the app was ignored (only the `#fragment` changed).
 - Job event journals are synced to disk, and a line torn by a crash no longer stops `libra jobs` from reading the history.
