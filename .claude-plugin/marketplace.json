@@ -10,7 +10,7 @@
       "name": "libra-skills",
       "displayName": "Libra skills",
       "source": "./",
-      "description": "Skills for a Libra checkout: verify changes, run the app, answer reviews, add Libra skills, explain the code (how, why), keep changes small (yagni, reducer), validate configs and data, release and deploy",
+      "description": "Skills for a Libra checkout: learn the code by writing it yourself (tutor), verify changes, run the app, answer reviews, add Libra skills, explain the code (how, why), keep changes small (yagni, reducer), validate configs and data, release and deploy",
       "version": "0.15.0",
       "author": {
         "name": "Sweitz1",

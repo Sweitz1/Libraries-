@@ -377,6 +377,7 @@ libra eval model "$LIBRA_HOME/m"
 
 ## Where next
 
+- **Learn by writing it yourself:** in Claude Code, `/tutor lesson 6` (or `/tutor add a word_count skill`) turns a lesson or a change into small steps that you write. It gives hints, never the answer, and checks each step with the tests.
 - **Change something:** the `yagni` skill (`.claude/skills/yagni/`) and [CONTRIBUTING.md](CONTRIBUTING.md).
 - **A map of every capability,** with links: [docs/REVIEW.md](docs/REVIEW.md).
 - **The phone side:** [docs/MOBILE.md](docs/MOBILE.md) and [`clients/java/`](clients/java/README.md).
