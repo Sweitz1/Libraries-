@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
     --base) base="${2:-}"; shift 2 || { echo "Error: --base needs a git ref" >&2; exit 2; } ;;
     --logs) logs="${2:-}"; shift 2 || { echo "Error: --logs needs a directory" >&2; exit 2; } ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "Error: unknown argument '$1'. Run with --help for the options." >&2; exit 2 ;;
+    *) printf "Error: unknown argument '%s'.\nUsage: scripts/verify.sh [--only python,docs] [--all] [--base REF]   (--help for details)\n" "$1" >&2; exit 2 ;;
   esac
 done
 
