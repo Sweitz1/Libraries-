@@ -6,10 +6,11 @@ Every skill has a risk level:
 * ``write``  changes something or sends something (create, update, post, send)
 * ``danger`` hard to undo (delete, pay, transfer, run commands)
 
-A decision is ``allow``, ``ask`` (confirm first) or ``deny``. Rules are checked
-from most to least specific: the exact skill name, then each source prefix
-(``mcp.github.create_issue`` -> ``mcp.github`` -> ``mcp``), then the default
-for the skill's risk level. Defaults: read = allow, write = ask, danger = ask.
+A decision is ``allow``, ``ask`` (confirm first) or ``deny``. All rules that apply to a
+skill are considered: its exact name and each source prefix (``mcp.github.create_issue``
+-> ``mcp.github`` -> ``mcp``). A ``deny`` from any of them wins, even over a more specific
+``allow`` and over ``--yes``. Otherwise the most specific rule decides, and with no rule the
+default for the skill's risk level applies. Defaults: read = allow, write = ask, danger = ask.
 
 Where nobody can answer a confirmation (the HTTP server, a script), ``ask``
 counts as ``deny``, and the reply says how to allow the skill.
@@ -49,16 +50,35 @@ def infer_risk(name: str, description: str = "") -> str:
     return "read"
 
 
-def redact(args: dict) -> dict:
-    out = {}
-    for k, v in (args or {}).items():
-        if _SECRET_KEYS.search(str(k)):
-            out[k] = "***"
-        elif isinstance(v, str) and len(v) > 300:
-            out[k] = v[:300] + "…"
-        else:
-            out[k] = v
-    return out
+_SECRET_TEXT = re.compile(
+    r"(?i)\b(bearer|basic|bot|token)\s+[A-Za-z0-9._~+/=-]{8,}"                    # Authorization-style values
+    r"|\b(?:sk|pk|rk|ghp|gho|ghs|github_pat|xox[abposr]|tskey|glpat)[-_][A-Za-z0-9_-]{8,}"  # well-known key formats
+    r"|([?&#](?:token|key|api_key|apikey|access_token|secret|password|auth)=)[^&\s#]+")  # credentials in URLs
+
+
+def _mask_text(text: str) -> str:
+    def sub(m):
+        if m.group(1):
+            return f"{m.group(1)} ***"
+        if m.group(2):
+            return f"{m.group(2)}***"
+        return "***"
+    return _SECRET_TEXT.sub(sub, text)
+
+
+def redact(value, depth: int = 0):
+    """A copy of ``value`` with secrets masked: secret-named fields at any depth, token-shaped strings,
+    and credentials inside URLs. Long strings are shortened."""
+    if depth > 8:
+        return "…"
+    if isinstance(value, dict):
+        return {k: ("***" if _SECRET_KEYS.search(str(k)) else redact(v, depth + 1)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact(v, depth + 1) for v in value[:50]] + (["…"] if len(value) > 50 else [])
+    if isinstance(value, str):
+        text = _mask_text(value)
+        return text if len(text) <= 300 else text[:300] + "…"
+    return value
 
 
 class Policy:
@@ -93,14 +113,20 @@ class Policy:
         return found
 
     def decide(self, name: str, risk: str) -> tuple[str, str]:
-        """``(decision, reason)`` for running skill ``name`` with ``risk``."""
-        if name in self.rules:
-            return self.rules[name], f"rule for {name}"
+        """``(decision, reason)`` for running skill ``name`` with ``risk``.
+
+        Every rule that applies is considered: the skill's own name and each source prefix
+        (``mcp.github.create_issue`` → ``mcp.github`` → ``mcp``). **A deny anywhere wins.** Otherwise the most
+        specific rule decides; with no rule, the default for the risk level applies."""
         parts = name.split(".")
-        for i in range(len(parts) - 1, 0, -1):
-            prefix = ".".join(parts[:i])
-            if prefix in self.rules:
-                return self.rules[prefix], f"rule for {prefix}"
+        applicable = [(t, self.rules[t]) for t in [".".join(parts[:i]) for i in range(len(parts), 0, -1)]
+                      if t in self.rules]
+        for target, decision in applicable:
+            if decision == "deny":
+                return "deny", f"rule for {target}"
+        if applicable:
+            target, decision = applicable[0]
+            return decision, f"rule for {target}"
         risk = risk if risk in RISKS else "write"
         return self.defaults[risk], f"default for {risk} skills"
 

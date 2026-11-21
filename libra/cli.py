@@ -751,6 +751,26 @@ def cmd_memory(args) -> None:
               if mem.items else "memory is empty")
 
 
+def cmd_devices(args) -> None:
+    from . import devices
+
+    if args.action == "add":
+        token, rec = devices.create(" ".join(args.items))
+        print(f"device '{rec['name']}' (#{rec['id']}); its token (shown once, use it as the API key):\n  {token}")
+    elif args.action == "revoke":
+        if not args.items:
+            raise SystemExit("usage: libra devices revoke <id>")
+        gone = devices.revoke(args.items[0])
+        print(("revoked: " + ", ".join(gone)) if gone else "no such device")
+    else:
+        rows = devices.listing()
+        if not rows:
+            print("no paired devices (libra pair creates one per scan)")
+        for d in rows:
+            print(f"  #{d['id']}  {d['name']}  created {d['created'][:16].replace('T', ' ')} by {d['created_by']}; "
+                  f"last seen {(d.get('last_seen') or 'never')[:16].replace('T', ' ')}")
+
+
 def cmd_pair(args) -> None:
     from . import pair
 
@@ -770,6 +790,12 @@ def cmd_pair(args) -> None:
     bases = [(pair.describe(u), u) for u in args.url] or pair.candidate_urls(args.port, args.local_only)
     if not bases:
         raise SystemExit("no address found to pair with; pass --url https://… or http://<ip>:<port>")
+    if token and not args.main_token:  # links carry a device token of their own, revocable on its own
+        from . import devices
+
+        token, record = devices.create(args.name or "", created_by="owner")
+        print(f"New device token '{record['name']}' (#{record['id']}); revoke it with: libra devices revoke "
+              f"{record['id']}\n")
     best = pair.link(bases[0][1], token)
     print(f"Scan with your phone's camera ({bases[0][0]}):\n")
     print(pair.qr_terminal(best))
@@ -1024,7 +1050,15 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--url", action="append", default=[], help="address to use instead of the detected ones")
     pr.add_argument("--token-file", help="token file (default: LIBRA_TOKEN or ~/.libra/server-token)")
     pr.add_argument("--local-only", action="store_true", help="only offer the Tailscale HTTPS address")
+    pr.add_argument("--name", help="a name for the new device, e.g. 'Ana's phone'")
+    pr.add_argument("--main-token", action="store_true",
+                    help="put the server's main token in the link instead of a new device token")
     pr.set_defaults(func=cmd_pair)
+
+    dv = sub.add_parser("devices", help="paired devices: list, add or revoke their access tokens")
+    dv.add_argument("action", choices=["list", "add", "revoke"])
+    dv.add_argument("items", nargs="*", help="add: a name; revoke: a device id")
+    dv.set_defaults(func=cmd_devices)
 
     w = sub.add_parser("scrape", help="extract text, tables, links or CSS-selected elements from a web page")
     w.add_argument("url")

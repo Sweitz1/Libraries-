@@ -35,12 +35,27 @@ OPEN_PATHS = {"/health", *STATIC}
 MAX_BODY = 2_000_000
 MAX_DRAIN = 16_000_000  # bodies bigger than this are cut off without reading
 MAX_FAILS, FAIL_WINDOW = 10, 600
+SOCKET_TIMEOUT = 60  # seconds a client may stay silent mid-request before the connection is dropped
+MAX_CONNECTIONS, MAX_PER_ADDRESS = 64, 16
+EXPENSIVE = ("/v1/chat/completions", "/v1/completions", "/v1/translate", "/v1/workspace/ask", "/v1/skills/",
+             "/v1/agent/", "/v1/auto/run")
+LIMITS = {"messages": 200, "goal": 2000, "text": 20000, "question": 4000}
+
+
+class Busy(Exception):
+    pass
 
 
 class Engine:
     def __init__(self, model, tokenizer, name: str = "libra", skills=None, auto_skills: bool = False,
-                 workspace=None, token: str | None = None, auto_config: str | None = None):
+                 workspace=None, token: str | None = None, auto_config: str | None = None,
+                 max_generations: int = 2, queue_wait: float = 30.0, rate_limit: int = 60):
         self.token = token or None
+        self.slots = threading.BoundedSemaphore(max(1, max_generations))  # generations running at once
+        self.queue_wait = queue_wait
+        self.rate_limit = rate_limit  # expensive requests per address per minute (0 = no limit)
+        self._hits: dict[str, list] = {}
+        self._hits_lock = threading.Lock()
         self.auto_config = auto_config
         self.model_dir: str | None = None  # set to reload the model when a new one is trained
         self._model_mtime = 0.0
@@ -56,7 +71,21 @@ class Engine:
         self.name = name
         self.skills = skills
         self.auto_skills = auto_skills
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()  # only guards swapping in a reloaded model
+
+    def allow_request(self, ip: str) -> float:
+        """0 if ``ip`` may make another expensive request now, else seconds to wait."""
+        if not self.rate_limit:
+            return 0.0
+        now = time.time()
+        with self._hits_lock:
+            hits = [t for t in self._hits.get(ip, []) if now - t < 60]
+            if len(hits) >= self.rate_limit:
+                self._hits[ip] = hits
+                return max(1.0, 60 - (now - hits[0]))
+            hits.append(now)
+            self._hits[ip] = hits
+        return 0.0
 
     def watch_model(self, model_dir: str) -> None:
         """Reload the model whenever ``model_dir/model.npz`` changes (e.g. after a nightly training run)."""
@@ -92,32 +121,49 @@ class Engine:
         call = self.skills.route(chat._content(messages[-1]))
         return self.skills.run(*call) if call else None
 
+    def acquire(self) -> None:
+        """Take a generation slot, waiting up to ``queue_wait`` seconds; raises :class:`Busy`."""
+        if not self.slots.acquire(timeout=self.queue_wait):
+            raise Busy()
+
     def run(self, prompt: str, params: SamplingParams, stop_strings: list[str], stop_tokens):
-        """Yield ``("text", piece)`` items, then ``("done", finish_reason, usage)``."""
+        """Yield ``("text", piece)`` items, then ``("done", finish_reason, usage)``.
+
+        The first ``next()`` takes a generation slot (raising :class:`Busy` if none frees up in time); the slot is
+        released when the generator finishes or is closed (for example when a streaming client disconnects). Generations run in parallel: each has its
+        own key/value cache, and the model and tokenizer are captured once, so a reload can't swap them
+        mid-reply."""
+        self.acquire()  # raises Busy before anything is produced
+        model, tokenizer = self.model, self.tokenizer
+        try:
+            yield from self._generate(model, tokenizer, prompt, params, stop_strings, stop_tokens)
+        finally:
+            self.slots.release()
+
+    def _generate(self, model, tokenizer, prompt, params, stop_strings, stop_tokens):
         stops = [s for s in stop_strings if s]
         hold = max((len(s) for s in stops), default=1) - 1
-        prompt_tokens = len(self.tokenizer.encode(prompt))
+        prompt_tokens = len(tokenizer.encode(prompt))
         text, emitted, n_tokens, finish = "", 0, 0, "stop"
-        with self.lock:
-            for piece in stream_text(self.model, self.tokenizer, prompt, params, stop_tokens):
-                n_tokens += 1
-                text += piece
-                hits = [i for i in (text.find(s) for s in stops) if i >= 0]
-                if hits:
-                    cut = min(hits)
-                    if cut > emitted:
-                        yield "text", text[emitted:cut]
-                    emitted = len(text)
-                    break
-                safe = len(text) - hold
-                if safe > emitted:
-                    yield "text", text[emitted:safe]
-                    emitted = safe
-            else:
-                if n_tokens >= params.max_tokens:
-                    finish = "length"
-                if len(text) > emitted:
-                    yield "text", text[emitted:]
+        for piece in stream_text(model, tokenizer, prompt, params, stop_tokens):
+            n_tokens += 1
+            text += piece
+            hits = [i for i in (text.find(s) for s in stops) if i >= 0]
+            if hits:
+                cut = min(hits)
+                if cut > emitted:
+                    yield "text", text[emitted:cut]
+                emitted = len(text)
+                break
+            safe = len(text) - hold
+            if safe > emitted:
+                yield "text", text[emitted:safe]
+                emitted = safe
+        else:
+            if n_tokens >= params.max_tokens:
+                finish = "length"
+            if len(text) > emitted:
+                yield "text", text[emitted:]
         usage = {"prompt_tokens": prompt_tokens, "completion_tokens": n_tokens,
                  "total_tokens": prompt_tokens + n_tokens}
         yield "done", finish, usage
@@ -146,6 +192,7 @@ def make_handler(engine: Engine):
     class Handler(BaseHTTPRequestHandler):
         server_version = "libra"
         protocol_version = "HTTP/1.1"
+        timeout = SOCKET_TIMEOUT  # applied to the socket: slow or silent clients are disconnected
 
         def log_message(self, fmt, *args):  # quieter default logging
             print(f"[server] {self.address_string()} {fmt % args}")
@@ -175,6 +222,13 @@ def make_handler(engine: Engine):
             auth = self.headers.get("Authorization", "")
             given = auth[7:].strip() if auth.lower().startswith("bearer ") else self.headers.get("X-Libra-Token", "")
             if given and hmac.compare_digest(given.encode(), engine.token.encode()):
+                self.principal = "owner"
+                return True
+            from . import devices
+
+            device = devices.verify(given)
+            if device is not None:
+                self.principal = f"device:{device['id']}"
                 return True
             with engine._fails_lock:
                 engine._fails.setdefault(ip, []).append(now)
@@ -214,6 +268,46 @@ def make_handler(engine: Engine):
                 info["auto"] = {"config": os.path.basename(engine.auto_config),
                                 "running": bool(engine.auto_thread and engine.auto_thread.is_alive())}
             return info
+
+        def _pair(self, body: dict) -> None:
+            """A new device token as a link + QR code, for the address this device is using."""
+            from urllib.parse import urlsplit
+
+            from . import devices
+            from .pair import link, qr_svg
+
+            parts = urlsplit(str(body.get("base") or ""))
+            if parts.scheme not in ("http", "https") or not parts.netloc or parts.path not in ("", "/"):
+                self._error(400, "base must be the app's address, like https://libra.example.ts.net")
+                return
+            token, record = None, None
+            if engine.token is not None:
+                token, record = devices.create(str(body.get("name") or ""),
+                                               created_by=getattr(self, "principal", "owner"))
+            url = link(f"{parts.scheme}://{parts.netloc}", token)
+            self._json(200, {"url": url, "svg": qr_svg(url), "device": {k: v for k, v in (record or {}).items()
+                                                                       if k != "hash"}})
+
+        def _revoke(self, device_id: str) -> None:
+            from . import devices
+
+            me = getattr(self, "principal", "owner")
+            known = {d["id"]: d for d in devices.listing()}
+            if device_id not in known:
+                self._error(404, "no such device")
+                return
+            if me != "owner":
+                mine, frontier = {me.split(":", 1)[1]}, True
+                while frontier:  # this device and everything it paired, however indirectly
+                    frontier = False
+                    for d in known.values():
+                        if d["id"] not in mine and d.get("created_by") in {f"device:{m}" for m in mine}:
+                            mine.add(d["id"])
+                            frontier = True
+                if device_id not in mine:
+                    self._error(403, "a device can only revoke itself and the devices it paired")
+                    return
+            self._json(200, {"revoked": devices.revoke(device_id)})
 
         def _agent_post(self, action: str, body: dict) -> None:
             from . import agent
@@ -295,17 +389,19 @@ def make_handler(engine: Engine):
             engine.auto_thread.start()
             self._json(202, {"started": True, "dry_run": dry_run})
 
-        def _json(self, status: int, obj) -> None:
+        def _json(self, status: int, obj, headers: dict | None = None) -> None:
             data = json.dumps(obj).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self._cors()
             self.end_headers()
             self.wfile.write(data)
 
-        def _error(self, status: int, message: str) -> None:
-            self._json(status, {"error": {"message": message, "type": "invalid_request_error"}})
+        def _error(self, status: int, message: str, headers: dict | None = None) -> None:
+            self._json(status, {"error": {"message": message, "type": "invalid_request_error"}}, headers)
 
         def do_OPTIONS(self):
             self.send_response(204)
@@ -330,18 +426,13 @@ def make_handler(engine: Engine):
                 self._json(200, {"goals": agent.load_goals(), "runs": agent.recent_runs(15),
                                  "running": running, "current": engine.agent_current if running else {}})
             elif path == "/v1/pair":
-                # a link + QR code for adding another device; the base is the address this device used
-                from urllib.parse import parse_qs, urlsplit
+                self._error(405, "pairing creates a device token: use POST /v1/pair {\"base\": …, \"name\": …}")
+            elif path == "/v1/devices":
+                from . import devices
 
-                from .pair import link, qr_svg
-
-                base = (parse_qs(urlsplit(self.path).query).get("base") or [""])[0]
-                parts = urlsplit(base)
-                if parts.scheme not in ("http", "https") or not parts.netloc or parts.path not in ("", "/"):
-                    self._error(400, "base must be the app's address, like https://libra.example.ts.net")
-                    return
-                url = link(f"{parts.scheme}://{parts.netloc}", engine.token)
-                self._json(200, {"url": url, "svg": qr_svg(url)})
+                me = getattr(self, "principal", "owner")
+                self._json(200, {"auth": engine.token is not None, "you": me, "devices": [
+                    dict(d, current=me == f"device:{d['id']}") for d in devices.listing()]})
             elif path == "/v1/auto/status":
                 if not engine.auto_config:
                     self._error(404, "server was started without --auto-config")
@@ -406,6 +497,16 @@ def make_handler(engine: Engine):
             except (ValueError, TypeError) as exc:
                 self._error(400, f"bad request: {exc}")
                 return
+            if any(path == e or (e.endswith("/") and path.startswith(e)) for e in EXPENSIVE):
+                wait = engine.allow_request(self._client())
+                if wait:
+                    self._error(429, f"too many requests from this address; try again in {wait:.0f}s",
+                                {"Retry-After": str(int(wait) + 1)})
+                    return
+            problem = _validate(path, body)
+            if problem:
+                self._error(400, problem)
+                return
 
             if path == "/v1/translate":
                 from .translate import Translator
@@ -422,6 +523,12 @@ def make_handler(engine: Engine):
                 return
             if path.startswith("/v1/agent/"):
                 self._agent_post(path[len("/v1/agent/"):], body)
+                return
+            if path == "/v1/pair":
+                self._pair(body)
+                return
+            if path == "/v1/devices/revoke":
+                self._revoke(str(body.get("id") or ""))
                 return
             if path == "/v1/auto/run":
                 self._auto_run(bool(body.get("dry_run")))
@@ -518,6 +625,12 @@ def make_handler(engine: Engine):
             obj = "chat.completion" if chat_mode else "text_completion"
             stop_tokens = chat.STOP_TOKENS if chat_mode else (chat.EOT,)
             events = engine.run(prompt, params, _stops(body), stop_tokens)
+            try:
+                first = next(events)  # takes a generation slot before any headers are sent
+            except Busy:
+                self._error(503, "busy: other replies are being generated; try again shortly", {"Retry-After": "5"})
+                return
+            events = _chain(first, events)
 
             if not body.get("stream"):
                 parts, finish, usage = [], "stop", {}
@@ -567,10 +680,93 @@ def make_handler(engine: Engine):
     return Handler
 
 
-def make_server(engine: Engine, host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), make_handler(engine))
-    server.daemon_threads = True
-    return server
+class _Chained:
+    """An iterator over ``first`` then ``rest`` that forwards close() (which releases the generation slot)."""
+
+    def __init__(self, first, rest):
+        self.first, self.rest = [first], rest
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self.first.pop() if self.first else next(self.rest)
+
+    def close(self):
+        self.rest.close()
+
+
+def _chain(first, rest):
+    return _Chained(first, rest)
+
+
+def _validate(path: str, body: dict) -> str | None:
+    """Size checks on the fields that drive expensive work."""
+    if path in ("/v1/chat/completions",):
+        msgs = body.get("messages")
+        if isinstance(msgs, list) and len(msgs) > LIMITS["messages"]:
+            return f"too many messages (at most {LIMITS['messages']})"
+    if path.startswith("/v1/agent/") and len(str(body.get("goal") or "")) > LIMITS["goal"]:
+        return f"goal too long (at most {LIMITS['goal']} characters)"
+    if path == "/v1/translate" and len(str(body.get("text") or "")) > LIMITS["text"]:
+        return f"text too long (at most {LIMITS['text']} characters)"
+    if path == "/v1/workspace/ask" and len(str(body.get("question") or "")) > LIMITS["question"]:
+        return f"question too long (at most {LIMITS['question']} characters)"
+    return None
+
+
+class LibraHTTPServer(ThreadingHTTPServer):
+    """Threaded server with a cap on open connections, overall and per address (slow-client protection)."""
+
+    daemon_threads = True
+
+    def __init__(self, address, handler, max_connections: int = MAX_CONNECTIONS, per_address: int = MAX_PER_ADDRESS):
+        super().__init__(address, handler)
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self._per_address = per_address
+        self._open: dict[str, int] = {}
+        self._open_lock = threading.Lock()
+
+    def _refuse(self, request) -> None:
+        try:
+            request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\nContent-Length: 0\r\n"
+                            b"Connection: close\r\n\r\n")
+        except OSError:
+            pass
+        self.shutdown_request(request)
+
+    def process_request(self, request, client_address):
+        ip = client_address[0]
+        with self._open_lock:
+            if self._open.get(ip, 0) >= self._per_address:
+                self._refuse(request)
+                return
+            if not self._slots.acquire(blocking=False):
+                self._refuse(request)
+                return
+            self._open[ip] = self._open.get(ip, 0) + 1
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._release(ip)
+            raise
+
+    def _release(self, ip: str) -> None:
+        with self._open_lock:
+            self._open[ip] = max(0, self._open.get(ip, 1) - 1)
+            if not self._open[ip]:
+                del self._open[ip]
+        self._slots.release()
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release(client_address[0])
+
+
+def make_server(engine: Engine, host: str = "127.0.0.1", port: int = 8000, **limits) -> ThreadingHTTPServer:
+    return LibraHTTPServer((host, port), make_handler(engine), **limits)
 
 
 def lan_addresses() -> list[str]:

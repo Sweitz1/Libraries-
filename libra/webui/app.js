@@ -363,12 +363,36 @@ $("pair-btn").addEventListener("click", async () => {
   for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", "false");
   for (const id of SECTIONS) $(id).hidden = id !== "pair";
   $("composer").hidden = true;
+  $("pair-qr").removeAttribute("src");
+  $("pair-link").textContent = "";
+  loadDevices();
+});
+$("pair-new").addEventListener("click", async () => {
   try {
-    const r = await json("/v1/pair?base=" + encodeURIComponent(location.origin));
+    const r = await json("/v1/pair", { base: location.origin, name: $("pair-name").value.trim() });
     $("pair-qr").src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(r.svg);
     $("pair-link").textContent = r.url;
+    loadDevices();
   } catch (e) { $("pair-link").textContent = "Error: " + e.message; }
 });
+async function loadDevices() {
+  const list = $("pair-devices"); list.textContent = "";
+  let r;
+  try { r = await json("/v1/devices"); } catch (e) { list.textContent = "Error: " + e.message; return; }
+  if (!r.auth) { list.append(el("p", { class: "muted", text: "This server runs without tokens." })); return; }
+  if (!r.devices.length) list.append(el("p", { class: "muted", text: "No paired devices yet." }));
+  for (const d of r.devices) {
+    const row = el("div", { class: "row", style: "margin:6px 0" },
+      el("span", { text: `${d.name}${d.current ? " (this device)" : ""} · last seen ${d.last_seen ? d.last_seen.replace("T", " ").slice(0, 16) : "never"}` }));
+    row.append(el("button", { class: "btn small secondary", text: "Revoke", style: "flex:0 0 auto", onclick: async () => {
+      if (!confirm(`Revoke “${d.name}”? It (and any device it paired) will have to be paired again.`)) return;
+      try { await json("/v1/devices/revoke", { id: d.id }); } catch (e) { alert(e.message); }
+      if (d.current) { store.del("libra-token"); token = null; showLogin("This device was revoked."); return; }
+      loadDevices();
+    } }));
+    list.append(row);
+  }
+}
 $("pair-copy").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText($("pair-link").textContent); $("pair-copy").textContent = "Copied"; }
   catch (e) { $("pair-copy").textContent = "Select the link to copy"; }

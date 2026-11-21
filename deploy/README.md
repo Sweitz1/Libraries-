@@ -11,7 +11,7 @@ sudo ./deploy/install-debian.sh --tailscale     # or without --tailscale for hom
 
 At the end it prints a **QR code. Point your phone's camera at it** and Libra opens already signed in. To keep it on the home screen, open the browser menu and choose *Add to Home Screen* (*Install app* on Android). It gets its own icon.
 
-To show the QR code again later: `sudo libra-admin pair --token-file /etc/libra/token`. In the app, the **Pair** button shows one for adding your other devices.
+Each QR code signs in **one device with its own token**. Pair another device with `sudo libra-admin pair --token-file /etc/libra/token --name "Ana's phone"`, or with the app's **Pair** button. A lost phone is revoked on its own: use *Revoke* on the Pair screen, or `sudo libra-admin devices list` and then `sudo libra-admin devices revoke <id>`. The main token in `/etc/libra/token` stays for you and your scripts.
 
 | Option | What it does |
 |---|---|
@@ -106,6 +106,6 @@ sudo systemctl restart libra                   # after changing /etc/libra/libra
 
 - **Firewall:** if `ufw` is on, allow only your home network: `sudo ufw allow from 192.168.0.0/16 to any port 8000 proto tcp`, plus `sudo ufw allow 5353/udp` for the `.local` name. Tailscale needs no firewall changes.
 - **Phones and `.local` names:** iPhones resolve `.local` names. Many Android phones do too (Android 12 and later), but not all; if yours doesn't, use the IP address link or Tailscale.
-- **New token:** `sudo sh -c 'head -c 18 /dev/urandom | base64 | tr "+/" "-_" > /etc/libra/token' && sudo systemctl restart libra`. Every device then has to scan a new QR code.
+- **Lost a phone?** Revoke just that device (see section 1). To replace the **main** token: `sudo sh -c 'head -c 18 /dev/urandom | base64 | tr "+/" "-_" > /etc/libra/token' && sudo systemctl restart libra`. Device tokens keep working until you revoke them.
 - **Backups:** back up `/var/lib/libra` and `/etc/libra/token`.
 - **Wrong tokens:** 10 wrong tries from one address lock that address out for 10 minutes.

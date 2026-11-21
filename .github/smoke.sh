@@ -26,5 +26,7 @@ libra memory search backup
 libra agent auto "what is (2+3)*4"
 libra agent procedures
 libra discord config
+libra devices add "ci laptop"
+libra devices list
 ./deploy/install-debian.sh --root "$work/install-root" --port 8799
 ./deploy/install-debian.sh --root "$work/install-root" --tailscale --discord --port 8799 </dev/null

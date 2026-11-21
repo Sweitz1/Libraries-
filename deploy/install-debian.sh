@@ -375,12 +375,14 @@ if [ "$TS_ONLY" = 0 ] && [ "$HOST" != "127.0.0.1" ]; then
 fi
 if [ "${#PAIR_ARGS[@]}" -gt 4 ]; then
   echo
-  "$LIBRA" pair "${PAIR_ARGS[@]}" || true
+  LIBRA_HOME="$(r $DATA)/home" "$LIBRA" pair "${PAIR_ARGS[@]}" --name "first phone" || true
+  if [ -z "$ROOT" ]; then chown -R "$SVC_USER:$SVC_USER" "$DATA/home"; fi
 else
   echo "   It listens on this machine only (port $PORT). See deploy/README.md for a reverse proxy or Tailscale."
 fi
 echo
-echo "   Show this QR code again any time:   sudo libra-admin pair --token-file $ETC/token"
+echo "   Pair another device (new QR code):  sudo libra-admin pair --token-file $ETC/token --name \"Ana's phone\""
+echo "   Paired devices / revoke one:        sudo libra-admin devices list  |  sudo libra-admin devices revoke <id>"
 echo "   OpenAI-compatible apps (Nexus Agent): base URL = one of the addresses above + /v1, API key = the token"
 echo "   Logs: journalctl -u libra -f        Token: $ETC/token"
 echo "   Training: edit $DATA/libra-auto.json (sources, then \"enabled\": true); runs nightly at $TRAIN_AT"

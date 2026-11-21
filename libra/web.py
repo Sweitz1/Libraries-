@@ -6,10 +6,13 @@ private/loopback addresses unless ``allow_private=True``.
 """
 from __future__ import annotations
 
+import functools
+import http.client
 import ipaddress
 import json
 import re
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -55,16 +58,99 @@ def normalize_url(url: str, base: str | None = None) -> str | None:
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path or "/", parts.query, ""))
 
 
+def _blocked_ip(ip_text: str) -> bool:
+    """True for anything that isn't a public address: private, loopback, link-local, CGNAT (100.64/10,
+    used by Tailscale), multicast, reserved, unspecified — including IPv4 addresses mapped into IPv6."""
+    ip = ipaddress.ip_address(ip_text.split("%")[0])
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return not ip.is_global or ip.is_multicast
+
+
 def _is_private_host(host: str) -> bool:
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
         return False  # let the request fail normally
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split("%")[0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            return True
-    return False
+    return any(_blocked_ip(info[4][0]) for info in infos)
+
+
+class PrivateAddressError(OSError):
+    pass
+
+
+def _safe_connect(host: str, port: int, timeout, source_address, allow_private: bool) -> socket.socket:
+    """Resolve ``host`` once and connect to an address that passed the check, so a second DNS answer
+    (DNS rebinding) can't send the request somewhere else."""
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    last_error: OSError | None = None
+    refused = []
+    for family, kind, proto, _, addr in infos:
+        if not allow_private and _blocked_ip(addr[0]):
+            refused.append(addr[0])
+            continue
+        sock = socket.socket(family, kind, proto)
+        try:
+            if timeout is not None and timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(addr)
+            return sock
+        except OSError as exc:
+            sock.close()
+            last_error = exc
+    if refused and last_error is None:
+        raise PrivateAddressError(f"refusing private or local address {host} ({', '.join(sorted(set(refused)))}); "
+                                  "use allow_private / --allow-private")
+    raise last_error or OSError(f"could not connect to {host}")
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, allow_private: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.allow_private = allow_private
+
+    def connect(self):
+        self.sock = _safe_connect(self.host, self.port, self.timeout, self.source_address, self.allow_private)
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, allow_private: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.allow_private = allow_private
+
+    def connect(self):
+        sock = _safe_connect(self.host, self.port, self.timeout, self.source_address, self.allow_private)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)  # certificate checked for the name
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, allow_private: bool):
+        super().__init__()
+        self.allow_private = allow_private
+
+    def http_open(self, req):
+        return self.do_open(functools.partial(_PinnedHTTPConnection, allow_private=self.allow_private), req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, allow_private: bool):
+        super().__init__(context=ssl.create_default_context())
+        self.allow_private = allow_private
+
+    def https_open(self, req):
+        return self.do_open(functools.partial(_PinnedHTTPSConnection, allow_private=self.allow_private), req,
+                            context=self._context)
+
+
+def _uses_proxy(url: str) -> bool:
+    """True if urllib would send ``url`` through a proxy (HTTP(S)_PROXY, honouring NO_PROXY)."""
+    parts = urlsplit(url)
+    proxies = urllib.request.getproxies()
+    if parts.scheme not in proxies:
+        return False
+    return not urllib.request.proxy_bypass(parts.hostname or "")
 
 
 class Fetcher:
@@ -85,7 +171,20 @@ class Fetcher:
                 fetcher._check_url(newurl)  # every hop gets the same safety checks
                 return super().redirect_request(req, fp, code, msg, headers, newurl)
 
-        self._opener = urllib.request.build_opener(_Redirect)
+        # Direct connections check the address they actually connect to (no DNS-rebinding window).
+        self._direct = urllib.request.build_opener(_Redirect, urllib.request.ProxyHandler({}),
+                                                   _PinnedHTTPHandler(allow_private), _PinnedHTTPSHandler(allow_private))
+        # Through a configured proxy the proxy makes the connection, so only the name check applies.
+        self._proxied = urllib.request.build_opener(_Redirect)
+
+    def _open(self, req):
+        opener = self._proxied if _uses_proxy(req.full_url) else self._direct
+        try:
+            return opener.open(req, timeout=self.timeout)
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, PrivateAddressError):
+                raise FetchError(str(exc.reason)) from None
+            raise
 
     # -------------------------------------------------------------- checks
     def _check_url(self, url: str) -> str:
@@ -103,8 +202,9 @@ class Fetcher:
         if key not in self._robots:
             rp = urllib.robotparser.RobotFileParser()
             try:
+                self._check_url(key + "/robots.txt")
                 req = urllib.request.Request(key + "/robots.txt", headers={"User-Agent": self.user_agent})
-                with self._opener.open(req, timeout=self.timeout) as r:
+                with self._open(req) as r:
                     rp.parse(r.read(500_000).decode("utf-8", "replace").splitlines())
             except urllib.error.HTTPError as exc:
                 if exc.code in (401, 403):
@@ -149,7 +249,7 @@ class Fetcher:
         req = urllib.request.Request(url, data=data, method=method.upper(),
                                      headers={"User-Agent": self.user_agent, **(headers or {})})
         try:
-            with self._opener.open(req, timeout=self.timeout) as r:
+            with self._open(req) as r:
                 raw = r.read(self.max_bytes + 1)[: self.max_bytes]
                 ctype = (r.headers.get("Content-Type") or "").lower()
                 charset = r.headers.get_content_charset()

@@ -30,7 +30,7 @@ The only dependency is **NumPy**. Everything else is in this repo. For a reviewe
 | `deploy/` | Debian installer (systemd services and timers, Tailscale, .local name, token, QR pairing), Caddy HTTPS example, setup guide |
 | `libra/auto.py` | Unattended collect → filter → train → gate → report runs, with locking, limits, rollback and scheduling |
 | `libra/knowledge.py` | Workspace of your files: BM25 search, cited grounded answers, clarifying questions, corrections and rules |
-| `libra/cli.py` | `libra data / train / auto / agent / memory / discord / pair / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
+| `libra/cli.py` | `libra data / train / auto / agent / memory / discord / pair / devices / generate / chat / serve / kb / translate / skill / mcp / api / trust / scrape / crawl / info` |
 
 Each operation in the autograd engine, and the full model, is checked against numerical gradients in `tests/`.
 
@@ -549,7 +549,7 @@ MCP tools' own `readOnlyHint` and `destructiveHint` annotations are used when pr
 
 ```bash
 libra trust allow mcp.files            # everything from one source
-libra trust deny api.bank.transfer     # one skill; deny always wins, even over --yes
+libra trust deny api.bank.transfer     # one skill; a deny always wins: over --yes and over a narrower allow
 libra trust allow write                # change a default
 libra trust list
 libra trust log                        # recent calls: decision, result, arguments (secrets redacted)
@@ -634,7 +634,11 @@ Nexus Agent can talk to any OpenAI-compatible endpoint. Start `libra serve --hos
 - **Model:** `libra`
 - **API key:** leave empty, or type anything
 
-With `--host 0.0.0.0`, Libra creates an access token (saved in `~/.libra/server-token`) and requires it as `Authorization: Bearer <token>`, which is the API key in OpenAI apps. Wrong tokens are rate-limited. Use `--token`, `--token-file`, or `--no-auth` for trusted local use only. For access from outside your home, see [deploy/README.md](deploy/README.md): use Tailscale or an HTTPS proxy, never a plain open port.
+With `--host 0.0.0.0`, Libra creates an access token (saved in `~/.libra/server-token`) and requires it as `Authorization: Bearer <token>`, which is the API key in OpenAI apps. Wrong tokens are rate-limited.
+
+Each paired phone gets **its own device token**: `libra pair --name "Ana's phone"`, or *Pair → New QR code* in the app. Only a hash is stored, and you can revoke one device at a time (`libra devices list`, `libra devices revoke <id>`, or *Revoke* in the app); revoking a device also revokes the devices it paired.
+
+The server also caps open connections (64, and 16 per address), disconnects clients that stay silent for 60 s, rate-limits expensive endpoints (60 per minute per address), and runs up to 2 generations in parallel, answering 503 `Retry-After` when busy. Use `--token`, `--token-file`, or `--no-auth` for trusted local use only. For access from outside your home, see [deploy/README.md](deploy/README.md): use Tailscale or an HTTPS proxy, never a plain open port.
 
 ## Use it as a library
 

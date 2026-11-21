@@ -169,13 +169,17 @@
   <section id="pair" hidden>
     <div class="card" style="text-align:center">
       <h2 style="margin-top:0">Add another device</h2>
-      <p class="muted">Scan with the other phone's camera. It opens Libra already signed in.</p>
+      <p class="muted">Each device gets its own sign-in, which you can revoke on its own.</p>
+      <div class="row"><input id="pair-name" placeholder="name, e.g. Ana's phone"><button class="btn" id="pair-new" style="flex:0 0 auto">New QR code</button></div>
+      <p class="muted">Scan it with the other device's camera. It opens Libra already signed in.</p>
       <img id="pair-qr" alt="QR code with the sign-in link" style="width:min(280px,80%);image-rendering:pixelated;border-radius:8px">
       <p class="out muted" id="pair-link" style="word-break:break-all"></p>
       <div class="row" style="justify-content:center"><button class="btn secondary" id="pair-copy">Copy link</button>
         <button class="btn" id="pair-close">Done</button></div>
-      <p class="muted">Anyone with this code or link can use your Libra. Share it only with your own devices.</p>
+      <p class="muted">Anyone with this code or link can use your Libra until you revoke it. Share it only with your own devices.</p>
     </div>
+    <h3>Paired devices</h3>
+    <div class="card" id="pair-devices"></div>
   </section>
 
   <section id="agent" hidden>

@@ -148,12 +148,14 @@ class AgentTest(unittest.TestCase):
             self.assertEqual(call("/v1/agent/goals", {"name": "x", "goal": "fly to the moon"})[0], 400)
             self.assertEqual(call("/v1/agent/goals", {"name": "x", "goal": "what is 1+1", "every": "daily@07:00"})[0], 200)
             self.assertIn("x", call("/v1/agent")[1]["goals"])
-            status, pair = call("/v1/pair?base=" + urllib.request.quote("https://libra.tail1.ts.net"))
-            self.assertEqual(pair["url"], "https://libra.tail1.ts.net/#token=tok")
+            status, pair = call("/v1/pair", {"base": "https://libra.tail1.ts.net", "name": "test phone"})
+            self.assertTrue(pair["url"].startswith("https://libra.tail1.ts.net/#token=dev_"))  # a device token
+            self.assertNotEqual(pair["url"].split("#token=", 1)[1], "tok")  # never the main token
             self.assertTrue(pair["svg"].startswith("<svg"))
-            self.assertEqual(call("/v1/pair?base=javascript:alert(1)")[0], 400)
-            req = urllib.request.Request(url + "/v1/pair?base=https://x.test")
-            with self.assertRaises(urllib.error.HTTPError):  # needs the token: it would reveal it
+            self.assertEqual(call("/v1/pair", {"base": "javascript:alert(1)"})[0], 400)
+            self.assertEqual(call("/v1/pair?base=https://x.test")[0], 405)  # GET must not create credentials
+            req = urllib.request.Request(url + "/v1/pair", b'{"base": "https://x.test"}', {"Content-Type": "application/json"})
+            with self.assertRaises(urllib.error.HTTPError):  # needs a token
                 urllib.request.urlopen(req, timeout=10)
         finally:
             srv.shutdown()
