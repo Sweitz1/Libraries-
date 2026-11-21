@@ -21,7 +21,7 @@ Libra's own model is tiny, so the project avoids depending on it for facts or pl
 The model is used for free-form chat, and can be trained on the user's data and on translation pairs.
 
 - **Size:** about 11,500 lines across [`libra/`](../libra) (Python, plus the web app's HTML/JS) and [`deploy/`](../deploy).
-- **Tests:** 193 Python test functions in 28 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
+- **Tests:** 194 Python test functions in 28 files, plus 6 JVM unit tests for the Android app under [`tests/`](../tests).
 - **User documentation:** [`README.md`](../README.md) and [`deploy/README.md`](../deploy/README.md).
 
 ## 2. Apps (what a person uses)

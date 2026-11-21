@@ -18,6 +18,33 @@ def run(*cmd, env=None):
     return subprocess.run(list(cmd), capture_output=True, text=True, timeout=120, env=env, cwd=ROOT)
 
 
+class MarketplaceTest(unittest.TestCase):
+    """The repository is a Claude Code plugin marketplace: .claude-plugin/marketplace.json publishes the
+    project skills as one plugin. `claude plugin validate .` checks it fully; this keeps the basics true
+    without that tool (paths stay inside the repository, every skill is in it, the version matches)."""
+
+    def test_marketplace(self):
+        with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json"), encoding="utf-8") as f:
+            m = json.load(f)
+        name = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+        self.assertRegex(m["name"], name)
+        self.assertNotIn("..", m["name"])
+        self.assertTrue(m["owner"]["name"])
+        (plugin,) = m["plugins"]
+        self.assertRegex(plugin["name"], name)
+        self.assertFalse(re.match(r"^(claude|anthropic|cc-plugin)", plugin["name"]))  # reserved prefixes
+        self.assertTrue(plugin["source"].startswith("./") and ".." not in plugin["source"])
+        root = os.path.normpath(os.path.join(ROOT, plugin["source"]))
+        for path in plugin["skills"]:
+            self.assertTrue(path.startswith("./") and ".." not in path, path)
+            folder = os.path.normpath(os.path.join(root, path))
+            self.assertTrue(folder.startswith(root) and os.path.isdir(folder), path)
+            self.assertEqual(sorted(os.listdir(folder)), sorted(os.listdir(SKILLS)))  # every project skill
+        with open(os.path.join(ROOT, "pyproject.toml"), encoding="utf-8") as f:
+            version = re.search(r'^version = "(.*)"', f.read(), re.M).group(1)
+        self.assertEqual(plugin["version"], version)  # scripts/release.sh keeps them together
+
+
 class SkillSpecTest(unittest.TestCase):
     """Every project skill follows the Agent Skills specification (https://agentskills.io/specification),
     so it loads in any tool that supports the standard, not only Claude Code."""

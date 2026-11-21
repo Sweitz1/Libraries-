@@ -34,7 +34,16 @@ cd android && gradle testDebugUnitTest lintDebug assembleDebug
 - Update the README or `docs/` when behaviour changes, and add a line to `CHANGELOG.md` under *Unreleased*.
 - Open a pull request; the template lists what reviewers check. CI must be green.
 
-**Working with Claude Code?** The repository has project skills in [`.claude/skills/`](.claude/skills). To write your own, start from [`templates/claude-skill/`](templates/claude-skill/SKILL.md):
+**Working with Claude Code?** The repository has project skills in [`.claude/skills/`](.claude/skills). In a checkout they load by themselves. The repository is also a plugin marketplace ([`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json)), so you can install the same skills in Claude Code without opening this folder:
+
+```text
+/plugin marketplace add Sweitz1/Libraries-
+/plugin install libra-skills@libra
+```
+
+Most of them expect a Libra checkout or an installed `libra` command. In a checkout you don't need the plugin, and having both lists each skill twice. Check changes to the marketplace with `claude plugin validate .`.
+
+To write your own skill, start from [`templates/claude-skill/`](templates/claude-skill/SKILL.md):
 
 | Skill | For |
 |---|---|

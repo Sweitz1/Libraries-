@@ -26,6 +26,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 - **Autonomous goals run as durable jobs**, and those jobs adjust their own plan when the result misses the goal's wording (at most twice, read-only skills within the goal's permissions), then learn the plan that worked. Saved autonomous goals and the app's Autonomous button now survive restarts, pause for approval, and keep to their permissions and pre-approvals. Before, a pre-approved change stopped them.
 
+- **A Claude Code plugin marketplace** (`.claude-plugin/marketplace.json`): the project skills install as one plugin with `/plugin marketplace add Sweitz1/Libraries-` and `/plugin install libra-skills@libra`. `scripts/release.sh` keeps its version in step.
+
 ### Fixed
 - A damaged job file (cut off, or not a job) was hidden from `libra jobs list` and the app, and failed with a raw JSON error; the server answered "n must be a number". It's now listed as `damaged`, with the file's path, and resuming carries on with the other jobs.
 - A job could fail to start ("already running") if someone listed the jobs at that moment: listing briefly checks each job's lock. Runners and owner decisions now wait up to 2 s for the lock; a real second runner is still refused. Found by a CI run.
