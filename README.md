@@ -2,7 +2,7 @@
 
 Libra is a small GPT-style language model where **every piece is original code**. It uses no pretrained weights, no downloaded model, no API key and no subscription. You train it on your own text, and it runs on your own computer.
 
-The only dependency is **NumPy**. Everything else is in this repo:
+The only dependency is **NumPy**. Everything else is in this repo. For a reviewer's map of every app, server, service and capability, with links to the code, see **[docs/REVIEW.md](docs/REVIEW.md)**.
 
 | File | What it is |
 |---|---|
