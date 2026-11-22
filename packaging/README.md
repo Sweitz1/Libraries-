@@ -50,8 +50,9 @@ sudo apt purge libra       # also remove /var/lib/libra, /etc/libra and the "lib
 
 - **Dependencies:** `python3 (>= 3.9)`, `python3-numpy`. `apt install ./file.deb` resolves them; a bare
   `dpkg -i` needs `apt-get -f install` afterwards to pull them.
-- **Build in CI / release:** `packaging/build-deb.sh` reads the version from `pyproject.toml`, so it tracks
-  releases. It can be run from a release workflow to attach a `.deb` alongside the wheel.
+- **Releases:** the `release` workflow builds this `.deb` (job `debian`) and attaches it to each GitHub
+  release next to the wheel, the APK and the Java client, listed in `SHA256SUMS`. `build-deb.sh` reads the
+  version from `pyproject.toml`, so the filename tracks the tag.
 - The code in `/usr/share/libra` is run read-only against the system Python; the service user only writes
   under `/var/lib/libra`.
 - The lore-wiki site has **no authentication** — keep it on `127.0.0.1` and reach it over SSH/Tailscale.
