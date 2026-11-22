@@ -6,7 +6,12 @@ name: release
 on:
   push:
     tags: ['v*.*.*', 'V*.*.*']   # a capital V only runs the check below, which explains and stops
-  workflow_dispatch:   # a dry run: builds the artifacts without publishing a release
+  workflow_dispatch:   # builds the artifacts; with publish=true also creates the release at this commit
+    inputs:
+      publish:
+        description: "Create/update the GitHub release at this commit (tag = v<version from pyproject.toml>)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -168,7 +173,9 @@ jobs:
       - name: Checksums and release notes
         run: |
           cd artifacts && sha256sum ./* > SHA256SUMS && cat SHA256SUMS && cd ..
-          v="${GITHUB_REF_NAME#v}"
+          # On a tag push the version is the tag; on a manual publish it comes from the code.
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"; fi
+          echo "REL_VERSION=$v" >> "$GITHUB_ENV"
           awk -v v="$v" '$0 ~ "^## \\[" v "\\]" {on=1; next} on && /^## \[/ {exit} on' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
           cat notes.md
@@ -177,13 +184,14 @@ jobs:
           name: release-bundle
           path: artifacts/
       - name: Create the GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Re-running a tag's workflow (e.g. after adding the signing key) replaces the files.
-          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
+          TAG="v${REL_VERSION}"
+          # Re-running replaces the files. On a manual publish the tag is created at this commit (--target).
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" artifacts/* --title "Libra ${GITHUB_REF_NAME#v}" --notes-file notes.md
+            gh release create "$TAG" artifacts/* --title "Libra ${REL_VERSION}" --notes-file notes.md --target "$GITHUB_SHA"
           fi
