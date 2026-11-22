@@ -77,7 +77,7 @@ def codex_add(title: str, kind: str = "", type: str = "", fields: str = "", body
                         continuity=cont, date=date.strip(), links=_parse_list(links), source=source.strip())
     note = f" with image {os.path.basename(entry['image'])}" if entry.get("image") else ""
     return SkillResult("codex_add", True,
-                       f"Saved “{entry['title']}” ({_codex.TYPE_LABELS.get(entry['type'], entry['type'])[:-1]}"
+                       f"Saved “{entry['title']}” ({_codex.type_singular(entry['type'])}"
                        f" in {_cont_name(cont)}) — {len(entry['fields'])} field(s){note}. Slug: {entry['slug']}.",
                        entry)
 

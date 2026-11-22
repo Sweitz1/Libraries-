@@ -172,6 +172,7 @@ You'll see the services (`etc/systemd/system/libra*.service` and `.timer`), the 
 ```bash
 sudo ./deploy/install-debian.sh                 # home Wi-Fi only
 sudo ./deploy/install-debian.sh --tailscale     # also reachable from anywhere (lesson 5)
+sudo ./deploy/install-debian.sh --full           # the whole suite: all plugins + the codex lore-wiki site
 ```
 
 At the end it prints a **QR code** and the links. It sets up, all starting at boot:
@@ -181,13 +182,24 @@ At the end it prints a **QR code** and the links. It sets up, all starting at bo
 | `libra.service` | the app and API, as an unprivileged `libra` user with a read-only system |
 | `libra-agent.timer` | runs your scheduled goals every 5 minutes |
 | `libra-auto.timer` | nightly training, **off until you choose sources** in `/var/lib/libra/libra-auto.json` |
+| plugin suite | worldbuilding/lorebook, fanfiction, cards, codex and document ingest, installed to `/var/lib/libra/home/plugins` and trusted for the service (unless `--no-plugins`) |
+| `libra-codex.service` | with `--full` or `--codex`: the codex lore-wiki website, bound to `127.0.0.1:8800` (no login) |
 | avahi | announces `<machine>.local` on your Wi-Fi |
 | `/etc/libra/token` | the main token |
 | `libra-admin` | runs any `libra` command as the service, e.g. `sudo libra-admin devices list` |
 
 Useful options: `--port 8080`, `--train-at 03:00`, `--no-train`, `--no-agent`, `--no-mdns`,
-`--local-only` (for your own HTTPS proxy, see [deploy/Caddyfile](deploy/Caddyfile)), `--uninstall`
-(removes the services; your data stays).
+`--no-plugins` (skip the plugin suite), `--codex` / `--codex-port N` / `--codex-host 0.0.0.0` (the lore-wiki
+site — localhost-only by default, and it has **no authentication**, so reach it over an SSH tunnel or
+Tailscale rather than binding it to your network), `--local-only` (for your own HTTPS proxy, see
+[deploy/Caddyfile](deploy/Caddyfile)), `--uninstall` (removes the services; your data stays).
+
+The codex wiki, when on, serves the same world the service owns. Reach it from your computer with:
+
+```bash
+ssh -L 8800:127.0.0.1:8800 <you>@<machine>.local      # then open http://127.0.0.1:8800/
+sudo libra-admin skill --yes run codex_add "Thor" type=character fields="race=Asgard"   # or build it from the CLI
+```
 
 **Check it worked**
 

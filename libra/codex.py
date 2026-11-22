@@ -44,6 +44,14 @@ _TYPE_HINTS = [
 ]
 
 
+def type_singular(etype: str) -> str:
+    """A singular label for a type ('character' -> 'Character', 'tech' -> 'Technology')."""
+    label = TYPE_LABELS.get(etype, "Article")
+    if etype == "species" or not label.endswith("s"):
+        return label
+    return label[:-1]
+
+
 def classify_type(kind: str) -> str:
     """Map a free-text kind ('ship', 'planet', 'villain') to a navigation type."""
     low = (kind or "").lower()

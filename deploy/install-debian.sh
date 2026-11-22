@@ -9,6 +9,12 @@
 #   sudo ./deploy/install-debian.sh --uninstall        # remove services; data stays in /var/lib/libra
 #
 #   sudo ./deploy/install-debian.sh --discord          # also run Libra as a Discord bot (asks for the bot token)
+#   sudo ./deploy/install-debian.sh --full             # the whole suite: plugins + the codex lore-wiki site
+#   sudo ./deploy/install-debian.sh --codex            # also run the codex lore-wiki website (local only)
+#
+# The plugin suite (worldbuilding/lorebook, fanfiction, cards, codex, PDF/Office/media ingest) installs by
+# default and is trusted for the service; pass --no-plugins to skip it. The codex site is opt-in (--codex),
+# binds to 127.0.0.1 with no auth (reach it over SSH or Tailscale); --codex-host / --codex-port override.
 #
 # Other options: --ts-hostname NAME (default libra), --no-mdns, --no-train, --no-agent, --no-apt.
 # For an unattended Tailscale login, pass a key in the environment: sudo TS_AUTHKEY=tskey-… ./install-debian.sh --tailscale
@@ -37,11 +43,15 @@ TAILSCALE=0
 TS_ONLY=0
 TS_HOST=libra
 DISCORD=0
+PLUGINS=1          # install and trust the plugin suite for the service
+CODEX=0            # run the codex lore-wiki website as a service
+CODEX_HOST=127.0.0.1
+CODEX_PORT=8800
 UNINSTALL=0
 ROOT=""            # test mode: install under this directory, skip apt, users, tailscale and systemctl
 SVC_USER=libra
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;
@@ -51,6 +61,12 @@ while [ $# -gt 0 ]; do
     --tailscale-only) TAILSCALE=1; TS_ONLY=1; HOST=127.0.0.1; MDNS=0; shift ;;
     --ts-hostname) TS_HOST="$2"; shift 2 ;;
     --discord) DISCORD=1; shift ;;
+    --plugins) PLUGINS=1; shift ;;
+    --no-plugins) PLUGINS=0; shift ;;
+    --codex) CODEX=1; PLUGINS=1; shift ;;
+    --codex-host) CODEX_HOST="$2"; CODEX=1; PLUGINS=1; shift 2 ;;
+    --codex-port) CODEX_PORT="$2"; CODEX=1; PLUGINS=1; shift 2 ;;
+    --full) PLUGINS=1; CODEX=1; shift ;;
     --train-at) TRAIN_AT="$2"; shift 2 ;;
     --no-train) TRAIN=0; shift ;;
     --no-agent) AGENT=0; shift ;;
@@ -65,6 +81,7 @@ done
 [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || { echo "bad --port" >&2; exit 1; }
 [[ "$TRAIN_AT" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || { echo "--train-at must be HH:MM (24h)" >&2; exit 1; }
 [[ "$TS_HOST" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { echo "--ts-hostname: lowercase letters, digits, -" >&2; exit 1; }
+[[ "$CODEX_PORT" =~ ^[0-9]+$ ]] && [ "$CODEX_PORT" -ge 1 ] && [ "$CODEX_PORT" -le 65535 ] || { echo "bad --codex-port" >&2; exit 1; }
 
 PREFIX=/opt/libra
 DATA=/var/lib/libra
@@ -80,9 +97,9 @@ if [ -z "$ROOT" ] && [ "$(id -u)" -ne 0 ]; then
 fi
 
 if [ "$UNINSTALL" = 1 ]; then
-  run_systemctl disable --now libra.service libra-auto.timer libra-agent.timer libra-discord.service 2>/dev/null || true
+  run_systemctl disable --now libra.service libra-auto.timer libra-agent.timer libra-discord.service libra-codex.service 2>/dev/null || true
   rm -f "$(r $UNITS)"/libra.service "$(r $UNITS)"/libra-auto.{service,timer} "$(r $UNITS)"/libra-agent.{service,timer} \
-        "$(r $UNITS)/libra-discord.service" \
+        "$(r $UNITS)/libra-discord.service" "$(r $UNITS)/libra-codex.service" \
         "$(r /usr/local/bin/libra-admin)" "$(r /etc/avahi/services/libra.service)"
   run_systemctl daemon-reload || true
   rm -rf "$(r $PREFIX)"
@@ -195,6 +212,23 @@ fi
 if [ -z "$ROOT" ]; then
   chown -R "$SVC_USER:$SVC_USER" "$DATA"
   chown "root:$SVC_USER" "$ETC/token"
+fi
+
+# ------------------------------------------------------------- plugin suite
+# Install the bundled plugins into the service's plugin folder (loaded automatically from LIBRA_HOME/plugins)
+# and record trust for each, so the worldbuilding / lorebook / codex / document skills work for the service.
+PLUGIN_DIR="$DATA/home/plugins"
+if [ "$PLUGINS" = 1 ]; then
+  say "installing the plugin suite (worldbuilding, lorebook, fanfiction, cards, codex, document ingest)"
+  mkdir -p "$(r $PLUGIN_DIR)"
+  cp "$(r $PREFIX)/src/plugins/"*.py "$(r $PLUGIN_DIR)/" 2>/dev/null || true
+  if [ -z "$ROOT" ]; then
+    chown -R "$SVC_USER:$SVC_USER" "$PLUGIN_DIR"
+    for f in "$PLUGIN_DIR"/*.py; do
+      [ -e "$f" ] || continue
+      runuser -u "$SVC_USER" -- env LIBRA_HOME="$DATA/home" "$LIBRA" trust accept-plugin "$f" >/dev/null 2>&1 || true
+    done
+  fi
 fi
 
 # ------------------------------------------------------------- services
@@ -326,6 +360,26 @@ WantedBy=multi-user.target
 EOF
 fi
 
+if [ "$CODEX" = 1 ]; then
+  cat > "$(r $UNITS)/libra-codex.service" <<EOF
+[Unit]
+Description=Libra: codex lore-wiki website (browse/add your world; MediaWiki-style api.php)
+After=network-online.target libra.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+$COMMON
+ExecStart=$PREFIX/venv/bin/libra skill --yes run codex_serve host=$CODEX_HOST port=$CODEX_PORT
+Restart=on-failure
+RestartSec=10
+$HARDEN
+
+[Install]
+WantedBy=multi-user.target
+EOF
+fi
+
 if [ "$MDNS" = 1 ]; then
   mkdir -p "$(r /etc/avahi/services)"
   cat > "$(r /etc/avahi/services/libra.service)" <<EOF
@@ -363,6 +417,7 @@ if [ "$DISCORD" = 1 ]; then
   run_systemctl enable libra-discord.service
   if [ -s "$(r $ETC)/discord-token" ]; then run_systemctl restart libra-discord.service; fi
 fi
+if [ "$CODEX" = 1 ]; then run_systemctl enable --now libra-codex.service; run_systemctl restart libra-codex.service; fi
 
 # ---------------------------------------------------------------- done
 echo
@@ -386,6 +441,20 @@ echo "   Paired devices / revoke one:        sudo libra-admin devices list  |  s
 echo "   OpenAI-compatible apps (Nexus Agent): base URL = one of the addresses above + /v1, API key = the token"
 echo "   Logs: journalctl -u libra -f        Token: $ETC/token"
 echo "   Training: edit $DATA/libra-auto.json (sources, then \"enabled\": true); runs nightly at $TRAIN_AT"
+if [ "$PLUGINS" = 1 ]; then
+  echo "   Plugins: the suite is installed and trusted in $PLUGIN_DIR (sudo libra-admin skill list to see them)."
+  echo "            Build a world:  sudo libra-admin skill --yes run codex_add \"Thor\" type=character fields=\"race=Asgard\""
+fi
+if [ "$CODEX" = 1 ]; then
+  echo "   Codex wiki: running at http://$CODEX_HOST:$CODEX_PORT/ (no login). Local only by default —"
+  if [ "$CODEX_HOST" = 127.0.0.1 ]; then
+    echo "               reach it with an SSH tunnel:  ssh -L $CODEX_PORT:127.0.0.1:$CODEX_PORT $(id -un)@$(hostname -s 2>/dev/null || hostname)"
+    echo "               then open http://127.0.0.1:$CODEX_PORT/ on your computer. Logs: journalctl -u libra-codex -f"
+  else
+    echo "               WARNING: bound to $CODEX_HOST with NO authentication — anyone who can reach it can read/add"
+    echo "               entries. Prefer 127.0.0.1 + an SSH tunnel, or Tailscale. Logs: journalctl -u libra-codex -f"
+  fi
+fi
 if [ "$DISCORD" = 1 ]; then
   if [ -s "$(r $ETC)/discord-token" ]; then
     echo "   Discord: invite link and check:  sudo libra-admin discord check --token-file $ETC/discord-token"

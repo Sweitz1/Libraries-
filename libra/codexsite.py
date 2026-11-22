@@ -128,8 +128,7 @@ def _infobox_html(entry: dict) -> str:
         parts.append(f'<figure class="pi-image"><img src="/{html.escape(entry["image"])}" alt="">'
                      + (f'<figcaption class="pi-image-caption">{cap}</figcaption>' if cap else "") + "</figure>")
     cont = codex.continuity(entry.get("continuity", codex.CANON_SLUG))
-    overview = [("Type", html.escape(entry.get("kind") or codex.TYPE_LABELS.get(entry.get("type", "article"),
-                                                                                "Article")[:-1]))]
+    overview = [("Type", html.escape(entry.get("kind") or codex.type_singular(entry.get("type", "article"))))]
     if cont:
         overview.append(("Continuity", html.escape(cont["name"])))
     if entry.get("date"):
@@ -182,7 +181,7 @@ def _body_html(body: str) -> str:
 
 
 def _type_label(entry: dict) -> str:
-    return entry.get("kind") or codex.TYPE_LABELS.get(entry.get("type", "article"), "Article")[:-1]
+    return entry.get("kind") or codex.type_singular(entry.get("type", "article"))
 
 
 def _cont_badge(cont: dict) -> str:
