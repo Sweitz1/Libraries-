@@ -70,6 +70,11 @@ The only thing it downloads is NumPy. Each [release](https://github.com/Sweitz1/
 has a ready-made wheel (`pip install libra_lm-*.whl`) and a `SHA256SUMS` file to check it with
 (`sha256sum -c --ignore-missing SHA256SUMS`).
 
+**Prefer a Debian package?** On a Raspberry Pi or Debian/Ubuntu box you can build and install a native
+`.deb` instead of the shell installer in lesson 4 — it sets up the service, plugins and lore-wiki the same
+way: `bash packaging/build-deb.sh` then `sudo apt install ./dist/libra_*_all.deb`. See
+[packaging/README.md](packaging/README.md).
+
 **Check it worked**
 
 ```bash
