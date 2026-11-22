@@ -179,6 +179,19 @@ class CommunityTest(unittest.TestCase):
         self.assertEqual(d["stories"][1]["genre"], "Sci-Fi/Drama")
         self.assertIn("Worlds Collide", r.text)
 
+    def test_query_filters_the_community(self):
+        with with_page(self.m, COMMUNITY):
+            r = self.m.fic_community("https://www.fanfiction.net/community/Crossovers/1076/", query="stargate")
+        self.assertTrue(r.ok)
+        self.assertEqual(r.data["count"], 1)                    # only "Second Dawn" mentions Stargate
+        self.assertEqual(r.data["stories"][0]["title"], "Second Dawn")
+
+    def test_query_with_no_match_is_reported(self):
+        with with_page(self.m, COMMUNITY):
+            r = self.m.fic_community("https://www.fanfiction.net/community/Crossovers/1076/", query="pokemon")
+        self.assertFalse(r.ok)
+        self.assertIn("match", r.text)
+
     def test_limit(self):
         with with_page(self.m, COMMUNITY):
             r = self.m.fic_community("https://www.fanfiction.net/community/Crossovers/1076/", limit=1)

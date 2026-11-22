@@ -173,12 +173,18 @@ def _route_community(message: str):
     return {"url": m.group(1)} if m else None
 
 
-@skill("fic_community", "List the stories collected in a fanfiction.net community, each with its author, "
-       "summary and metadata.",
+def _row_matches(row: dict, query: str) -> bool:
+    hay = " ".join(str(row.get(k, "")) for k in ("title", "summary", "characters", "genre", "rating")).lower()
+    return all(term in hay for term in query.lower().split())
+
+
+@skill("fic_community", "List (and optionally search) the stories collected in a fanfiction.net community, "
+       "each with its author, summary and metadata.",
        {"url": "the community URL, e.g. https://www.fanfiction.net/community/Crossovers/1076/",
+        "query": "optional words to filter the stories by (title/summary/characters/genre)",
         "limit": "most stories to return (default 50)", "out": "optional .json file to write the list to"},
        router=_route_community, risk="read", external=True)
-def fic_community(url: str, limit: int = 50, out: str = "") -> SkillResult:
+def fic_community(url: str, query: str = "", limit: int = 50, out: str = "") -> SkillResult:
     from libra.web import parse_html
 
     resp = _fetch(url)
@@ -191,12 +197,17 @@ def fic_community(url: str, limit: int = 50, out: str = "") -> SkillResult:
     doc = parse_html(resp.text)
     name_node = doc.select_one("#content_wrapper_inner span.xcontrast_txt") or doc.find("title")
     rows = [r for r in (_story_row(row) for row in doc.select(".z-list")) if r["title"]]
+    if query.strip():
+        rows = [r for r in rows if _row_matches(r, query.strip())]
     rows = rows[: max(0, int(limit))]
     if not rows:
+        if query.strip():
+            return SkillResult("fic_community", False, f"No stories in that community match “{query}”.")
         return SkillResult("fic_community", False,
                            f"No stories found on {url}. Make sure it's a community page "
                            "(…/community/<name>/<id>/) with a story list.")
-    record = {"url": url, "community": name_node.text if name_node else "", "count": len(rows), "stories": rows}
+    record = {"url": url, "community": name_node.text if name_node else "", "query": query,
+              "count": len(rows), "stories": rows}
     if out:
         with open(os.path.expanduser(out), "w", encoding="utf-8") as f:
             json.dump(record, f, ensure_ascii=False, indent=2)

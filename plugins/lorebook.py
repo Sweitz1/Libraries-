@@ -205,21 +205,106 @@ def _api_parse(api: str, title: str, fetch) -> dict | None:
     return parse
 
 
+def _card_from_parse(parse: dict, url: str) -> dict:
+    """Build a lorebook card from a MediaWiki ``action=parse`` result."""
+    wikitext = parse["wikitext"] if isinstance(parse["wikitext"], str) else parse["wikitext"].get("*", "")
+    name, fields = _infobox_fields(wikitext)
+    cats = [c.get("category", "") if isinstance(c, dict) else str(c) for c in parse.get("categories", [])]
+    cats = [c.replace("_", " ") for c in cats if c and not c.lower().startswith(("hidden", "stub"))]
+    disp = parse.get("displaytitle") or parse.get("title") or url.rsplit("/wiki/", 1)[-1].replace("_", " ")
+    disp = re.sub(r"<[^>]+>", "", str(disp))
+    return {"title": disp, "url": url, "kind": _guess_kind(name, cats),
+            "summary": _lead_summary(wikitext), "fields": fields, "categories": cats,
+            "source": "mediawiki-api", "infobox": name}
+
+
 def _wiki_entry(url: str, fetch) -> dict | None:
     for api, title in _wiki_targets(url):
         parse = _api_parse(api, title, fetch)
+        if parse is not None:
+            return _card_from_parse(parse, url)
+    return None
+
+
+# ----------------------------------------------------- search & world build
+def _api_candidates(wiki: str):
+    """Yield the MediaWiki ``api.php`` URLs to try for a wiki, from a domain or any page URL."""
+    parts = urlsplit(wiki if re.match(r"https?://", wiki, re.I) else "https://" + wiki)
+    if not parts.netloc:
+        return
+    base = f"{parts.scheme}://{parts.netloc}"
+    prefixes = []
+    m = re.match(r"(.*/)wiki/", parts.path)
+    if m:
+        prefixes.append(m.group(1))
+    prefixes += ["/", "/w/"]
+    seen = set()
+    for p in prefixes:
+        api = base + re.sub(r"//+", "/", p + "api.php")
+        if api not in seen:
+            seen.add(api)
+            yield api
+
+
+def _api_search(api: str, query: str, limit: int, fetch) -> list | None:
+    """Full-text search a MediaWiki, returning page titles. None if this isn't a MediaWiki search API."""
+    q = urlencode({"action": "query", "list": "search", "srsearch": query, "srlimit": str(max(1, limit)),
+                   "srnamespace": "0", "srprop": "", "format": "json", "formatversion": "2"})
+    try:
+        resp = fetch(api + "?" + q)
+    except Exception:
+        return None
+    if resp.status != 200:
+        return None
+    try:
+        data = json.loads(resp.text)
+    except (ValueError, json.JSONDecodeError):
+        return None
+    search = data.get("query", {}).get("search") if isinstance(data.get("query"), dict) else None
+    if search is None:
+        return None
+    return [row.get("title", "") for row in search if isinstance(row, dict) and row.get("title")]
+
+
+def _article_url(api: str, title: str) -> str:
+    parts = urlsplit(api)
+    return f"{parts.scheme}://{parts.netloc}/wiki/" + quote(title.replace(" ", "_"), safe="/:()")
+
+
+def _pull_titles(api: str, titles: list, fetch, seen: set, limit: int) -> list:
+    """Fetch and card-ify each title (skipping ones with no infobox and no summary, and duplicates)."""
+    cards = []
+    for title in titles:
+        if len(cards) >= limit or title in seen:
+            continue
+        seen.add(title)
+        parse = _api_parse(api, title, fetch)
         if parse is None:
             continue
-        wikitext = parse["wikitext"] if isinstance(parse["wikitext"], str) else parse["wikitext"].get("*", "")
-        name, fields = _infobox_fields(wikitext)
-        cats = [c.get("category", "") if isinstance(c, dict) else str(c) for c in parse.get("categories", [])]
-        cats = [c.replace("_", " ") for c in cats if c and not c.lower().startswith(("hidden", "stub"))]
-        disp = parse.get("displaytitle") or parse.get("title") or title
-        disp = re.sub(r"<[^>]+>", "", str(disp))
-        return {"title": disp, "url": url, "kind": _guess_kind(name, cats),
-                "summary": _lead_summary(wikitext), "fields": fields, "categories": cats,
-                "source": "mediawiki-api", "infobox": name}
+        card = _card_from_parse(parse, _article_url(api, title))
+        if card["fields"] or card["summary"]:
+            cards.append(card)
+    return cards
+
+
+def _resolve_api(wiki: str, probe: str, fetch) -> str | None:
+    """Find the working api.php for a wiki by trying a search against each candidate."""
+    for api in _api_candidates(wiki):
+        if _api_search(api, probe or "a", 1, fetch) is not None:
+            return api
     return None
+
+
+def _parse_seeds(seeds: str) -> list:
+    """``wiki = term | term ; wiki2 = term`` -> [(wiki, [terms]), …]."""
+    out = []
+    for part in seeds.split(";"):
+        wiki, sep, terms = part.strip().partition("=")
+        wiki = wiki.strip()
+        term_list = [t.strip() for t in terms.split("|") if t.strip()] if sep else []
+        if wiki and term_list:
+            out.append((wiki, term_list))
+    return out
 
 
 # ------------------------------------------------------------------ HTML
@@ -286,10 +371,109 @@ def _render(entry: dict) -> str:
     return "\n".join(out)
 
 
+def _render_world(record: dict, out: str) -> str:
+    by_wiki: dict = {}
+    for e in record["world"]:
+        by_wiki.setdefault(e.get("source_wiki", record.get("sources", [""])[0] if record.get("sources") else ""),
+                           []).append(e)
+    lines = [f"# {record.get('title', 'World')}", f"{record['count']} entries "
+             f"from {len(by_wiki)} source(s)", ""]
+    for wiki, entries in by_wiki.items():
+        lines.append(f"## {wiki}  ({len(entries)})")
+        for e in entries:
+            kind = f" [{e['kind']}]" if e["kind"] != "entry" else ""
+            nfields = len(e["fields"])
+            lines.append(f"- **{e['title']}**{kind} — {nfields} spec field(s)"
+                         + (f"; {e['summary'][:100]}…" if e["summary"] else ""))
+        lines.append("")
+    if record.get("problems"):
+        lines += ["Problems:"] + [f"- {p}" for p in record["problems"]] + [""]
+    lines.append("Sources: " + ", ".join(record.get("sources", [])))
+    if out:
+        lines += ["", f"[world written to {out} — add it with: libra kb add {out}]"]
+    return "\n".join(lines)
+
+
 def _route(message: str):
     m = re.search(r"\b(?:lore|lorebook|worldbook|world ?book|infobox|wiki|character|spec(?:s|\s*sheet)?)\b"
                   r".{0,40}?(https?://\S+)", message, re.I)
     return {"url": m.group(1)} if m else None
+
+
+@skill("worldbook_search", "Search a fan wiki and pull the matching pages as lorebook cards, so you don't "
+       "have to find each page URL yourself.",
+       {"wiki": "the wiki, e.g. https://stargate.fandom.com", "query": "what to search for, e.g. Asgard",
+        "limit": "most pages to pull (default 5)", "out": "optional .json file to write the cards to"},
+       risk="read", external=True)
+def worldbook_search(wiki: str, query: str, limit: int = 5, out: str = "") -> SkillResult:
+    limit = max(1, min(int(limit), 25))
+    fetch = fetcher(delay=0.3).get
+    api = _resolve_api(wiki, query, fetch)
+    if api is None:
+        return SkillResult("worldbook_search", False,
+                           f"Couldn't reach a MediaWiki search API for {wiki}. Give the wiki's address, "
+                           "e.g. https://stargate.fandom.com.")
+    titles = _api_search(api, query, limit, fetch) or []
+    entries = _pull_titles(api, titles, fetch, set(), limit)
+    if not entries:
+        return SkillResult("worldbook_search", False,
+                           f"No pages with lore matched “{query}” on {wiki}.")
+    root = "{0.scheme}://{0.netloc}".format(urlsplit(api))
+    record = {"title": f"{query} — {root}", "sources": [root], "seeds": f"{wiki}={query}",
+              "count": len(entries), "world": [dict(e, source_wiki=root) for e in entries]}
+    if out:
+        import os
+
+        with open(os.path.expanduser(out), "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+    return SkillResult("worldbook_search", True, _render_world(record, out), record)
+
+
+@skill("world_build", "Build a combined world file by searching one or more fan wikis for the lore you name "
+       "and pulling the pages automatically — no manual page URLs.",
+       {"seeds": "wiki = term | term ; wiki2 = term  (e.g. "
+                 "https://stargate.fandom.com=Asgard|Daedalus ; https://masseffect.fandom.com=Reapers|Normandy)",
+        "limit": "most pages per search term (default 5)", "name": "a name for the world",
+        "out": "optional .json file to write the world to"},
+       risk="read", external=True)
+def world_build(seeds: str, limit: int = 5, name: str = "Test world", out: str = "") -> SkillResult:
+    pairs = _parse_seeds(seeds)
+    if not pairs:
+        raise ValueError("world_build needs seeds like  "
+                         "https://stargate.fandom.com=Asgard|Daedalus ; https://masseffect.fandom.com=Reapers")
+    limit = max(1, min(int(limit), 25))
+    fetch = fetcher(delay=0.3).get
+    world, sources, problems, total_cap = [], [], [], 80
+    for wiki, terms in pairs:
+        api = _resolve_api(wiki, terms[0], fetch)
+        if api is None:
+            problems.append(f"no MediaWiki API found for {wiki}")
+            continue
+        root = "{0.scheme}://{0.netloc}".format(urlsplit(api))
+        sources.append(root)
+        seen: set = set()
+        before = len(world)
+        for term in terms:
+            if len(world) >= total_cap:
+                break
+            titles = _api_search(api, term, limit, fetch) or []
+            for card in _pull_titles(api, titles, fetch, seen, limit):
+                card["source_wiki"] = root
+                world.append(card)
+        if len(world) == before:
+            problems.append(f"{root}: no lore pages matched {', '.join(terms)}")
+    if not world:
+        return SkillResult("world_build", False,
+                           "No lore pulled. " + (" ".join(problems) or "Check the wiki URLs and search terms."))
+    record = {"title": name, "seeds": seeds, "sources": sources, "count": len(world), "world": world}
+    if problems:
+        record["problems"] = problems
+    if out:
+        import os
+
+        with open(os.path.expanduser(out), "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+    return SkillResult("world_build", True, _render_world(record, out), record)
 
 
 @skill("worldbook", "Pull a structured lorebook card (summary + infobox spec fields) from a fan wiki or fan "

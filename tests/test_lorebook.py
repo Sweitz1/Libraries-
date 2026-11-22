@@ -183,13 +183,128 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(self.m._guess_kind("Infobox", []), "entry")
 
 
+import urllib.parse as _up  # noqa: E402
+
+
+class WikiFake:
+    """A fake MediaWiki: answers list=search and action=parse for a few wikis, no network."""
+
+    def __init__(self, wikis):
+        self.wikis = wikis                              # {host: {"search": {term: [titles]}, "pages": {t: wikitext}}}
+        self.calls = []
+
+    def get(self, url):
+        self.calls.append(url)
+        parts = _up.urlsplit(url)
+        q = {k: v[0] for k, v in _up.parse_qs(parts.query).items()}
+        wiki = self.wikis.get(parts.netloc)
+        if wiki is None:
+            return Resp("nope", status=404)
+        if q.get("list") == "search":
+            titles = wiki["search"].get(q.get("srsearch", ""), [])
+            return Resp(json.dumps({"query": {"search": [{"title": t} for t in titles]}}),
+                        content_type="application/json")
+        if q.get("action") == "parse":
+            wt = wiki["pages"].get(q.get("page", ""))
+            if wt is None:
+                return Resp(json.dumps({"error": {"code": "missingtitle"}}), content_type="application/json")
+            cats = wiki.get("cats", {}).get(q["page"], [])
+            return Resp(json.dumps({"parse": {"title": q["page"], "displaytitle": q["page"], "wikitext": wt,
+                        "categories": [{"category": c} for c in cats]}}), content_type="application/json")
+        return Resp("{}", content_type="application/json")
+
+
+SG_ASGARD = ("{{Infobox species\n| homeworld = [[Othala]]\n| affiliation = [[Asgard High Council]]\n}}\n"
+             "The '''Asgard''' are a benevolent, highly advanced race who allied with Earth.\n== History ==\nx\n")
+SG_DAEDALUS = "{{Infobox starship\n| class = [[BC-304]]\n| affiliation = Tau'ri\n}}\nThe '''Daedalus''' is a battlecruiser.\n"
+ME_REAPERS = "{{Infobox species\n| origin = Dark space\n}}\nThe '''Reapers''' are a machine race that harvests life.\n"
+ME_NORMANDY = ("{{Infobox starship\n| class = Frigate\n| crew = [[Commander Shepard]]\n}}\n"
+               "The '''Normandy SR-2''' is a frigate used by Commander Shepard.\n")
+
+TWO_WIKIS = {
+    "stargate.fandom.com": {"search": {"Asgard": ["Asgard"], "Daedalus": ["Daedalus"]},
+                            "pages": {"Asgard": SG_ASGARD, "Daedalus": SG_DAEDALUS},
+                            "cats": {"Asgard": ["Races"], "Daedalus": ["BC-304"]}},
+    "masseffect.fandom.com": {"search": {"Reapers": ["Reapers"], "Normandy": ["Normandy SR-2"]},
+                              "pages": {"Reapers": ME_REAPERS, "Normandy SR-2": ME_NORMANDY}},
+}
+
+
+class SearchAndWorldTest(unittest.TestCase):
+    def setUp(self):
+        self.m = load()
+
+    def patch(self, fake):
+        return mock.patch.object(self.m, "fetcher", lambda **kw: fake)
+
+    def test_worldbook_search_pulls_pages_without_a_page_url(self):
+        fake = WikiFake(TWO_WIKIS)
+        with self.patch(fake):
+            res = self.m.worldbook_search("https://stargate.fandom.com", "Asgard", limit=5)
+        self.assertTrue(res.ok)
+        self.assertEqual(res.data["count"], 1)
+        e = res.data["world"][0]
+        self.assertEqual(e["title"], "Asgard")
+        self.assertEqual(e["kind"], "species")
+        self.assertEqual(e["fields"]["affiliation"], "Asgard High Council")
+        self.assertEqual(e["source_wiki"], "https://stargate.fandom.com")
+        # it searched, then pulled the page via the API — never a hand-given page URL
+        self.assertTrue(any("list=search" in c for c in fake.calls))
+        self.assertTrue(any("action=parse" in c for c in fake.calls))
+
+    def test_world_build_combines_two_fandoms(self):
+        fake = WikiFake(TWO_WIKIS)
+        seeds = ("https://stargate.fandom.com = Asgard | Daedalus ; "
+                 "https://masseffect.fandom.com = Reapers | Normandy")
+        with self.patch(fake):
+            res = self.m.world_build(seeds, limit=5, name="Crossover test world")
+        self.assertTrue(res.ok)
+        d = res.data
+        self.assertEqual(d["count"], 4)                         # Asgard, Daedalus, Reapers, Normandy SR-2
+        self.assertEqual(set(d["sources"]), {"https://stargate.fandom.com", "https://masseffect.fandom.com"})
+        titles = {e["title"] for e in d["world"]}
+        self.assertEqual(titles, {"Asgard", "Daedalus", "Reapers", "Normandy SR-2"})
+        wikis = {e["source_wiki"] for e in d["world"]}
+        self.assertEqual(len(wikis), 2)                         # each entry tagged with its fandom
+        self.assertIn("Crossover test world", res.text)
+        self.assertIn("## https://masseffect.fandom.com", res.text)
+
+    def test_world_build_writes_json_for_kb_add(self):
+        fake = WikiFake(TWO_WIKIS)
+        with tempfile.TemporaryDirectory() as t:
+            out = os.path.join(t, "world.json")
+            with self.patch(fake):
+                res = self.m.world_build("https://stargate.fandom.com=Asgard", out=out)
+            self.assertTrue(res.ok)
+            with open(out, encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["world"][0]["title"], "Asgard")
+            self.assertIn("kb add", res.text)                   # tells the user how to ingest it
+
+    def test_world_build_reports_a_wiki_it_cant_reach(self):
+        fake = WikiFake(TWO_WIKIS)
+        with self.patch(fake):
+            res = self.m.world_build("https://stargate.fandom.com=Asgard ; https://no-such.example=Thing")
+        self.assertTrue(res.ok)                                 # the reachable wiki still produced lore
+        self.assertEqual(res.data["count"], 1)
+        self.assertIn("no-such.example", " ".join(res.data["problems"]))
+
+    def test_search_on_unknown_wiki_is_reported(self):
+        fake = WikiFake(TWO_WIKIS)
+        with self.patch(fake):
+            res = self.m.worldbook_search("https://no-such.example", "Thing")
+        self.assertFalse(res.ok)
+        self.assertIn("MediaWiki search API", res.text)
+
+
 class RegistrationTest(unittest.TestCase):
     def test_registration_and_outside_content(self):
         from libra.skills import SkillRegistry
 
         reg = SkillRegistry()
         got = reg.load_plugins([os.path.join(ROOT, "plugins")], log=None)
-        self.assertIn("worldbook", got)
+        self.assertEqual({"worldbook", "worldbook_search", "world_build"} & set(got),
+                         {"worldbook", "worldbook_search", "world_build"})
         sk = reg.get("worldbook")
         self.assertTrue(sk.untrusted_output)                # web content is marked outside
         # unaccepted plugin: its read label is held as write until the file is accepted
