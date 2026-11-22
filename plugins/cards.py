@@ -1,15 +1,15 @@
 """Libra plugin: render a Fandom-style *card* (spec card, character card) as an image.
 
     libra skill run worldbook https://stargate.fandom.com/wiki/Thor --out thor.json
-    libra skill run card thor.json --out thor.svg            # character card, from the wiki data
-    libra skill run card https://stargate.fandom.com/wiki/Daedalus --out daedalus.svg   # straight from a URL
-    libra skill run card ragnarok.json --out ragnarok.svg --image ragnarok_art.png      # spec card + your art
+    libra skill run card thor.json --out thor.png            # character card PNG, from the wiki data
+    libra skill run card https://stargate.fandom.com/wiki/Daedalus --out daedalus.png   # straight from a URL
+    libra skill run card ragnarok.json --out ragnarok.svg --image ragnarok_art.png      # SVG + your art
 
 It reads a record saved by ``worldbook``, ``fic_spec`` or ``fic_progression`` (or pulls a wiki page itself)
-and lays it out as a clean SVG card — a titled header, the label/value fields, categories/source, and an
-artwork slot. **Libra has no image model, so it does not draw the ship or person**; the slot shows a
-labelled placeholder unless you embed real art with ``--image``. An SVG opens in any browser; pass an
-``--out`` ending in ``.png`` and it is converted too if ``rsvg-convert``/``inkscape`` is installed.
+and lays it out as a clean card — a titled header, the label/value fields, categories/source, and an
+artwork slot. A ``.png`` is rendered **by Libra itself** (``libra.raster``: from-scratch PNG, no external
+tool); a ``.svg`` is vector and can embed real art. **Libra has no image model, so it does not draw the
+ship or person** — the slot is a labelled placeholder unless you embed your own art with ``--image``.
 
 Load with ``--plugins plugins/`` and accept once: ``libra trust accept-plugin plugins/cards.py``.
 """
@@ -18,8 +18,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import subprocess
 
 from libra import card as _card
 from libra import wiki as _wiki
@@ -62,55 +60,37 @@ def _load_record(src: str) -> dict:
     return rec
 
 
-def _to_png(svg: str, out: str) -> str | None:
-    """Convert SVG to PNG if a converter is installed; returns the PNG path or None."""
-    with open(out[:-4] + ".svg", "w", encoding="utf-8") as f:
-        f.write(svg)
-    svg_path = out[:-4] + ".svg"
-    if shutil.which("rsvg-convert"):
-        cmd = ["rsvg-convert", svg_path, "-o", out]
-    elif shutil.which("inkscape"):
-        cmd = ["inkscape", svg_path, "--export-type=png", f"--export-filename={out}"]
-    else:
-        return None
-    try:
-        r = subprocess.run(cmd, capture_output=True, timeout=60)
-        return out if r.returncode == 0 and os.path.isfile(out) else None
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-
-
-@skill("card", "Render a Fandom-style spec/character card as an SVG image from a saved record or a wiki page "
-       "(Libra has no image model, so artwork is a placeholder unless you embed one with --image).",
+@skill("card", "Render a Fandom-style spec/character card as an image (PNG or SVG) from a saved record or a "
+       "wiki page. Libra renders the PNG itself — no external tool — but has no image model, so artwork is a "
+       "placeholder unless you embed one with --image (SVG only).",
        {"src": "a .json from worldbook/fic_spec/fic_progression, or a wiki page URL",
-        "out": "image file to write (.svg, or .png to also convert)", "image": "optional image file to embed"},
+        "out": "image file to write (.png rendered natively, or .svg)", "image": "image file to embed (SVG)",
+        "scale": "PNG pixel scale, 1-4 (default 2)"},
        risk="read", external=True)
-def card(src: str, out: str = "", image: str = "") -> SkillResult:
+def card(src: str, out: str = "", image: str = "", scale: int = 2) -> SkillResult:
     record = _load_record(src)
     model = _card.card_model(record, image=image)
-    svg = _card.render_card(model)
 
     if not out:
         slug = re.sub(r"[^\w-]+", "-", model["title"].lower()).strip("-") or "card"
-        out = slug + ".svg"
+        out = slug + ".png"
     out = os.path.expanduser(out)
-    wrote = []
+    if not out.lower().endswith((".png", ".svg")):
+        out += ".png"
+
     if out.lower().endswith(".png"):
-        png = _to_png(svg, out)
-        wrote.append(out[:-4] + ".svg")
-        if png:
-            wrote.append(png)
-        else:
-            return SkillResult("card", True, f"Wrote {out[:-4] + '.svg'} (no rsvg-convert/inkscape for PNG; "
-                               "the SVG opens in any browser).", {"svg": out[:-4] + ".svg", "title": model["title"]})
+        png = _card.render_card_png(model, scale=max(1, min(int(scale), 4)))
+        with open(out, "wb") as f:
+            f.write(png)
+        detail, size = "rendered natively to PNG", len(png)
+        note = "  [artwork is a placeholder — Libra can't draw it; embed real art with --image into an .svg]"
     else:
-        if not out.lower().endswith(".svg"):
-            out += ".svg"
+        svg = _card.render_card(model)
         with open(out, "w", encoding="utf-8") as f:
             f.write(svg)
-        wrote.append(out)
+        detail, size = "SVG", len(svg)
+        note = "" if image else "  [artwork is a placeholder — embed real art with --image]"
 
     rows = sum(len(s.get("rows", [])) for s in model["sections"])
-    note = ("" if image else "  [artwork is a placeholder — Libra can't draw it; embed real art with --image]")
-    return SkillResult("card", True, f"Wrote {', '.join(wrote)} — “{model['title']}” card with {rows} field(s)."
-                       + note, {"files": wrote, "title": model["title"], "fields": rows, "svg_length": len(svg)})
+    return SkillResult("card", True, f"Wrote {out} ({detail}) — “{model['title']}” card with {rows} field(s)."
+                       + note, {"file": out, "title": model["title"], "fields": rows, "bytes": size})

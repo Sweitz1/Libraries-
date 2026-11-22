@@ -40,7 +40,7 @@ class CardPluginTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_card_from_json_record(self):
+    def test_card_svg_from_json_record(self):
         rec = {"subject": "Ragnarok", "heading": "Technical Readout", "url": "https://ff/s/1/7/",
                "specs": {"Length": "1,900 m", "Crew": "2,500"}, "mentions": ["Asgard"]}
         src = os.path.join(self.tmp.name, "ragnarok.json")
@@ -55,6 +55,32 @@ class CardPluginTest(unittest.TestCase):
         self.assertIn("Ragnarok", svg)
         self.assertIn("1,900 m", svg)
         self.assertIn("placeholder", r.text)                   # no --image given
+
+    def test_card_png_is_rendered_natively(self):
+        rec = {"subject": "Ragnarok", "specs": {"Length": "1,900 m", "Crew": "2,500"}, "url": ""}
+        src = os.path.join(self.tmp.name, "r.json")
+        with open(src, "w") as f:
+            json.dump(rec, f)
+        out = os.path.join(self.tmp.name, "r.png")
+        r = self.m.card(src, out=out, scale=2)
+        self.assertTrue(r.ok)
+        with open(out, "rb") as f:
+            self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")   # a real PNG, no external tool
+        self.assertIn("natively", r.text)
+
+    def test_default_out_is_png(self):
+        rec = {"title": "Thor", "fields": {"race": "Asgard"}, "url": ""}
+        src = os.path.join(self.tmp.name, "thor.json")
+        with open(src, "w") as f:
+            json.dump(rec, f)
+        cwd = os.getcwd()
+        os.chdir(self.tmp.name)                                 # default out is <slug>.png in the cwd
+        try:
+            r = self.m.card(src)
+            self.assertTrue(r.data["file"].endswith(".png"))
+            self.assertTrue(os.path.isfile(os.path.join(self.tmp.name, "thor.png")))
+        finally:
+            os.chdir(cwd)
 
     def test_card_from_wiki_url(self):
         out = os.path.join(self.tmp.name, "daedalus.svg")
@@ -75,18 +101,6 @@ class CardPluginTest(unittest.TestCase):
         r = self.m.card(src, out=os.path.join(self.tmp.name, "a.svg"))
         self.assertTrue(r.ok)
         self.assertEqual(r.data["title"], "Asgard")
-
-    def test_png_without_converter_falls_back_to_svg(self):
-        rec = {"title": "X", "fields": {"a": "b"}, "summary": "", "categories": [], "url": ""}
-        src = os.path.join(self.tmp.name, "x.json")
-        with open(src, "w") as f:
-            json.dump(rec, f)
-        out = os.path.join(self.tmp.name, "x.png")
-        with mock.patch.object(self.m.shutil, "which", lambda t: None):
-            r = self.m.card(src, out=out)
-        self.assertTrue(r.ok)
-        self.assertTrue(os.path.isfile(out[:-4] + ".svg"))     # SVG written even though PNG couldn't convert
-        self.assertFalse(os.path.isfile(out))
 
     def test_registration(self):
         from libra.skills import SkillRegistry

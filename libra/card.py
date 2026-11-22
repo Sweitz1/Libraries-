@@ -30,8 +30,12 @@ _CHAR = 0.55                 # average glyph width as a fraction of font size (s
 
 
 def _wrap(text: str, size: int, width_px: int) -> list:
-    """Greedy word-wrap to a pixel width, hard-splitting any over-long word."""
-    max_chars = max(4, int(width_px / (size * _CHAR)))
+    """Greedy word-wrap to a pixel width (proportional-font estimate), for the SVG backend."""
+    return _wrap_chars(text, max(4, int(width_px / (size * _CHAR))))
+
+
+def _wrap_chars(text: str, max_chars: int) -> list:
+    """Greedy word-wrap to a character count, hard-splitting any over-long word."""
     out, line = [], ""
     for word in str(text).split():
         while len(word) > max_chars:                       # a single word longer than the column
@@ -174,3 +178,89 @@ def card_model(record: dict, image: str = "") -> dict:
         footer.append(f"Source: {record['url']}")
     return {"title": record.get("title", "Card"), "subtitle": record.get("kind", ""),
             "image": img, "sections": sections, "footer": footer}
+
+
+# ----------------------------------------------- native PNG (no SVG converter)
+def _rgb(hex_color: str):
+    h = hex_color.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def render_card_png(model: dict, scale: int = 2) -> bytes:
+    """Render the card straight to PNG bytes with libra.raster — no SVG converter needed.
+
+    Text is the built-in small-caps bitmap font. Artwork can't be embedded in this backend (no image
+    decoder), so the slot is always a placeholder; use the SVG backend to embed real art."""
+    from .raster import Canvas
+
+    s, ts = scale, scale + 1                                    # body and title glyph scale
+    cell = 6 * s                                                # one glyph's advance in px
+    label_cap, cap = 14, 24                                     # label / value columns, in characters
+    pad, gap = cell, cell
+    label_w, value_w = label_cap * cell, cap * cell
+    wp = pad + label_w + gap + value_w + pad
+    accent = _rgb(model.get("accent") or ACCENT)
+    body_lh = Canvas.line_height(s)
+    title_cap = max(6, (wp - 2 * pad) // (6 * ts))
+
+    # ---- measure (first pass): build a draw list and a running height
+    draw, y = [], 0
+    title_lines = _wrap_chars(model.get("title", "Card"), title_cap)
+    subtitle = model.get("subtitle", "")
+    head_h = pad + len(title_lines) * Canvas.line_height(ts) + (body_lh if subtitle else pad // 2)
+    y = head_h
+    # artwork placeholder
+    ph_h = 26 * s
+    draw.append(("rect", 0, y, wp, ph_h, (238, 241, 245), 255))
+    draw.append(("ctext", y + ph_h // 2 - s * 5, "no illustration", (138, 147, 163), s))
+    draw.append(("ctext", y + ph_h // 2 + s * 2, "libra has no image model", (170, 178, 191), max(1, s - 1)))
+    y += ph_h
+    row_i = 0
+    for section in model.get("sections", []):
+        if section.get("heading"):
+            draw.append(("rect", 0, y, wp, body_lh + s, accent, 32))
+            draw.append(("text", pad, y + s, section["heading"], accent, s))
+            y += body_lh + s
+        for label, value in section.get("rows", []):
+            llines, vlines = _wrap_chars(label, label_cap), _wrap_chars(value, cap)
+            rows = max(len(llines), len(vlines))
+            rh = rows * body_lh + 2 * s
+            if row_i % 2 == 0:
+                draw.append(("rect", 0, y, wp, rh, (245, 247, 250), 255))
+            for i, ln in enumerate(llines):
+                draw.append(("text", pad, y + s + i * body_lh, ln, (58, 65, 77), s))
+            for i, ln in enumerate(vlines):
+                draw.append(("text", pad + label_w + gap, y + s + i * body_lh, ln, (28, 33, 39), s))
+            y += rh
+            row_i += 1
+    for line in model.get("footer", []):
+        for ln in _wrap_chars(line, max(6, (wp - 2 * pad) // (6 * s))):
+            draw.append(("text", pad, y + s, ln, (138, 147, 163), max(1, s)))
+            y += body_lh
+    y += pad
+    height = y
+
+    # ---- draw (second pass)
+    c = Canvas(wp, height, (255, 255, 255))
+    for op in draw:
+        if op[0] == "rect":
+            c.fill_rect(op[1], op[2], op[3], op[4], op[5], op[6])
+        elif op[0] == "text":
+            c.text(op[1], op[2], op[3], op[4], op[5])
+        elif op[0] == "ctext":
+            _, yy, txt, col, sc = op
+            c.text((wp - Canvas.text_width(txt, sc)) // 2, yy, txt, col, sc)
+    # header on top
+    c.fill_rect(0, 0, wp, head_h, accent)
+    ty = pad
+    for ln in title_lines:
+        c.text(pad, ty, ln, (255, 255, 255), ts)
+        ty += Canvas.line_height(ts)
+    if subtitle:
+        c.text(pad, ty, subtitle, (215, 222, 234), s)
+    # border
+    c.fill_rect(0, 0, wp, 1, _rgb("c7ceda"))
+    c.fill_rect(0, height - 1, wp, 1, _rgb("c7ceda"))
+    c.fill_rect(0, 0, 1, height, _rgb("c7ceda"))
+    c.fill_rect(wp - 1, 0, 1, height, _rgb("c7ceda"))
+    return c.to_png()
