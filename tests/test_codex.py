@@ -80,6 +80,24 @@ class StoreTest(CodexBase):
         self.assertEqual(hits[0]["title"], "USS Daedalus")
         self.assertEqual(codex.search("asgard")[0]["title"], "Thor")
 
+    def test_canon_tier_stored_and_filtered(self):
+        from libra import codex
+
+        codex.save("Thor", kind="character", fields={"race": "Asgard"}, canon="official")
+        codex.save("Erin", kind="character", canon="mine")
+        self.assertEqual(codex.get("Thor")["canon"], "official")
+        self.assertEqual([e["title"] for e in codex.search("", tier="mine")], ["Erin"])
+        self.assertIn("official", codex.by_tier())
+        with self.assertRaises(ValueError):
+            codex.save("X", canon="nonsense")
+
+    def test_conflicts_detects_changed_fields(self):
+        from libra import codex
+
+        existing = {"fields": {"rank": "Supreme Commander", "race": "Asgard"}}
+        clashes = codex.conflicts(existing, {"rank": "Fleet Admiral", "race": "Asgard", "age": "900"})
+        self.assertEqual(clashes, {"rank": ("Supreme Commander", "Fleet Admiral")})   # changed only; new field ok
+
     def test_markdown_and_record(self):
         from libra import codex
 
@@ -125,6 +143,58 @@ class PluginTest(CodexBase):
         with open(out, "rb") as f:
             self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
 
+    def test_contradiction_is_flagged_then_forced(self):
+        self.m.codex_add("Thor", kind="character", fields="rank=Supreme Commander", canon="official")
+        flagged = self.m.codex_add("Thor", kind="character", fields="rank=Fleet Admiral", canon="official")
+        self.assertFalse(flagged.ok)                           # established lore change, not saved
+        self.assertIn("rank", flagged.data["conflicts"])
+        from libra import codex
+
+        self.assertEqual(codex.get("Thor")["fields"]["rank"], "Supreme Commander")   # unchanged
+        forced = self.m.codex_add("Thor", kind="character", fields="rank=Fleet Admiral", canon="official",
+                                  force=True)
+        self.assertTrue(forced.ok)
+        self.assertEqual(codex.get("Thor")["fields"]["rank"], "Fleet Admiral")
+
+    def test_new_fields_do_not_trigger_a_flag(self):
+        self.m.codex_add("Ship", fields="class=BC-304", canon="mine")
+        r = self.m.codex_add("Ship", fields="class=BC-304; crew=200", canon="mine")   # adds crew, keeps class
+        self.assertTrue(r.ok)
+
+    def test_import_tags_canon_and_source(self):
+        rec = {"title": "Asgard", "kind": "species", "fields": {"homeworld": "Othala"},
+               "summary": "A race.", "categories": ["Races"], "url": "https://stargate.fandom.com/wiki/Asgard"}
+        src = os.path.join(self.tmp.name, "a.json")
+        with open(src, "w") as f:
+            json.dump(rec, f)
+        self.m.codex_import(src, canon="fanon")
+        from libra import codex
+
+        e = codex.get("Asgard")
+        self.assertEqual(e["canon"], "fanon")
+        self.assertEqual(e["source"], "https://stargate.fandom.com/wiki/Asgard")
+
+    def test_build_static_site(self):
+        self.m.codex_add("USS Daedalus", kind="ship", fields="class=BC-304",
+                         body="A battlecruiser.\n== History ==\nBuilt by the Tau'ri.", canon="official")
+        self.m.codex_add("Erin", kind="character", canon="mine", body="An innkeeper.")
+        out = os.path.join(self.tmp.name, "site")
+        r = self.m.codex_build(out)
+        self.assertTrue(r.ok)
+        self.assertEqual(r.data["entries"], 2)
+        self.assertTrue(os.path.isfile(os.path.join(out, "index.html")))
+        self.assertTrue(os.path.isfile(os.path.join(out, "wiki", "uss-daedalus.html")))
+        with open(os.path.join(out, "index.html"), encoding="utf-8") as f:
+            idx = f.read()
+        self.assertIn("Official canon", idx)                   # grouped by tier
+        self.assertIn("Your canon", idx)
+        self.assertIn('href="wiki/uss-daedalus.html"', idx)    # static relative links
+        with open(os.path.join(out, "wiki", "uss-daedalus.html"), encoding="utf-8") as f:
+            page = f.read()
+        self.assertIn('class="portable-infobox"', page)
+        self.assertIn("History", page)
+        self.assertIn('href="../index.html"', page)            # home link rewritten for subdir
+
     def test_import_fic_spec_record(self):
         rec = {"subject": "Ragnarok", "heading": "Technical Readout",
                "specs": {"Length": "1,900 m", "Crew": "2,500"}, "mentions": ["Asgard", "Vipers"]}
@@ -162,7 +232,8 @@ class PluginTest(CodexBase):
 
         reg = SkillRegistry()
         got = reg.load_plugins([os.path.join(ROOT, "plugins")], log=None)
-        want = {"codex_add", "codex_search", "codex_get", "codex_card", "codex_import", "codex_export"}
+        want = {"codex_add", "codex_search", "codex_get", "codex_card", "codex_import", "codex_export",
+                "codex_build", "codex_serve"}
         self.assertEqual(want & set(got), want)
         # codex_add changes local data: a write skill (and its label held until the plugin is accepted)
         self.assertEqual(reg.get("codex_add").risk, "write")

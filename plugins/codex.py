@@ -43,20 +43,44 @@ def _parse_list(text: str) -> list:
 
 
 @skill("codex_add", "Add or update an entry in your personal fan wiki (character, item, tech, ship, place) "
-       "with fields and an optional image.",
+       "with fields, an optional image, and a canon tier. Flags contradictions before changing established "
+       "lore (re-run with force=true to apply).",
        {"title": "the entry title, e.g. USS Daedalus", "kind": "character/item/tech/ship/place/…",
         "fields": "infobox fields, 'key=value; key=value'", "body": "a description paragraph",
-        "categories": "comma-separated categories", "image": "optional image file to attach"},
+        "categories": "comma-separated categories", "image": "optional image file to attach",
+        "canon": "canon tier: official / fanon / mine (default mine)", "source": "where the lore came from",
+        "force": "true to overwrite existing field values (change established lore)"},
        risk="write", external=False)
 def codex_add(title: str, kind: str = "", fields: str = "", body: str = "", categories: str = "",
-              image: str = "") -> SkillResult:
+              image: str = "", canon: str = "mine", source: str = "", force: bool = False) -> SkillResult:
     if not title.strip():
         raise ValueError("codex_add needs a title")
-    entry = _codex.save(title.strip(), kind=kind.strip(), fields=_parse_fields(fields), body=body.strip(),
-                        categories=_parse_list(categories), image=image or None)
+    canon = canon.strip().lower() or "mine"
+    if canon not in _codex.CANON_TIERS:
+        raise ValueError(f"canon must be one of {', '.join(_codex.CANON_TIERS)}")
+    new_fields = _parse_fields(fields)
+    existing = _codex.get(title.strip())
+    if existing and not force:                                 # flag contradictions before changing established lore
+        clashes = _codex.conflicts(existing, new_fields)
+        tier_change = existing.get("canon", "mine") != canon and (existing.get("fields") or existing.get("body"))
+        if clashes or tier_change:
+            lines = [f"⚠ “{title.strip()}” already exists — this would change established lore. Not saved."]
+            for k, (old, new) in clashes.items():
+                lines.append(f"  - {k}: “{old}” → “{new}”")
+            if tier_change:
+                lines.append(f"  - canon tier: {existing.get('canon', 'mine')} → {canon}")
+            lines.append("Re-run with force=true to apply, or change the title to keep both versions "
+                         "(e.g. official vs your canon) separate.")
+            return SkillResult("codex_add", False, "\n".join(lines),
+                               {"conflicts": {k: {"old": o, "new": n} for k, (o, n) in clashes.items()},
+                                "title": title.strip()})
+    entry = _codex.save(title.strip(), kind=kind.strip(), fields=new_fields, body=body.strip(),
+                        categories=_parse_list(categories), image=image or None, canon=canon,
+                        source=source.strip())
     note = f" with image {os.path.basename(entry['image'])}" if entry.get("image") else ""
+    tier = _codex.CANON_TIERS[entry["canon"]]
     return SkillResult("codex_add", True,
-                       f"Saved “{entry['title']}” ({entry.get('kind') or 'entry'}) to your codex"
+                       f"Saved “{entry['title']}” ({entry.get('kind') or 'entry'}; {tier}) to your codex"
                        f" — {len(entry['fields'])} field(s){note}. Slug: {entry['slug']}.", entry)
 
 
@@ -114,35 +138,41 @@ def _as_entries(record: dict) -> list:
     """Map a worldbook / fic_spec / fic_progression / world record to codex entry kwargs."""
     if isinstance(record.get("world"), list):                  # a world file: many entries
         return [kw for e in record["world"] for kw in _as_entries(e)]
+    src = record.get("url", "")
     if "specs" in record:                                      # fic_spec
         body = record.get("heading", "")
         if record.get("mentions"):
             body = (body + "\nReferences: " + ", ".join(record["mentions"])).strip()
         return [{"title": record.get("subject", "Spec"), "kind": "ship", "fields": record["specs"],
-                 "body": body, "categories": record.get("mentions", [])}]
+                 "body": body, "categories": record.get("mentions", []), "source": src}]
     if "timeline" in record:                                   # fic_progression
         body = "\n".join(e.get("text", "") for e in record["timeline"])
         return [{"title": record.get("character", "Character"), "kind": "character", "fields": {},
-                 "body": body, "categories": ["progression"]}]
+                 "body": body, "categories": ["progression"], "source": src}]
     if record.get("title"):                                     # worldbook / generic
         return [{"title": record["title"], "kind": record.get("kind", ""), "fields": record.get("fields", {}),
-                 "body": record.get("summary", ""), "categories": record.get("categories", [])}]
+                 "body": record.get("summary", ""), "categories": record.get("categories", []),
+                 "source": record.get("url", "")}]
     return []
 
 
 @skill("codex_import", "Import a saved record (worldbook / fic_spec / fic_progression / world file) into "
-       "your personal fan wiki as one or more entries.",
-       {"src": "the .json file to import"}, risk="write", external=False)
-def codex_import(src: str) -> SkillResult:
+       "your personal fan wiki as one or more entries, tagged with a canon tier.",
+       {"src": "the .json file to import", "canon": "canon tier for the imports: official / fanon / mine "
+        "(default fanon, since imports come from elsewhere)"}, risk="write", external=False)
+def codex_import(src: str, canon: str = "fanon") -> SkillResult:
     src = os.path.expanduser(src)
     if not os.path.isfile(src):
         raise ValueError(f"no such file: {src}")
+    canon = canon.strip().lower() or "fanon"
+    if canon not in _codex.CANON_TIERS:
+        raise ValueError(f"canon must be one of {', '.join(_codex.CANON_TIERS)}")
     with open(src, encoding="utf-8") as f:
         record = json.load(f)
     entries = _as_entries(record) if isinstance(record, dict) else []
     if not entries:
         return SkillResult("codex_import", False, f"Didn't recognise any entries in {src}.")
-    saved = [_codex.save(**kw) for kw in entries]
+    saved = [_codex.save(canon=canon, **kw) for kw in entries]
     return SkillResult("codex_import", True,
                        f"Imported {len(saved)} entr{'y' if len(saved) == 1 else 'ies'} into your codex: "
                        + ", ".join(e["title"] for e in saved[:10]) + ("…" if len(saved) > 10 else ""),
@@ -171,6 +201,21 @@ def codex_serve(host: str = "127.0.0.1", port: int = 8800) -> SkillResult:
         srv.shutdown()
         srv.server_close()
     return SkillResult("codex_serve", True, f"Codex site at {url} stopped.", {"url": url})
+
+
+@skill("codex_build", "Generate a static, text-only wiki-style website from your codex (the lorebook is the "
+       "single source of truth, so the site never drifts from it). No server needed.",
+       {"out_dir": "folder to write the site to (default ~/.libra/codex/site)"},
+       risk="write", external=False)
+def codex_build(out_dir: str = "") -> SkillResult:
+    from libra.codexsite import build_site
+
+    out_dir = os.path.expanduser(out_dir) if out_dir else os.path.join(_codex.base(), "site")
+    report = build_site(out_dir)
+    return SkillResult("codex_build", True,
+                       f"Built a static wiki of {report['entries']} entr"
+                       f"{'y' if report['entries'] == 1 else 'ies'} at {out_dir}. Open {report['index']} "
+                       "in a browser, or host the folder anywhere (no server, no JavaScript).", report)
 
 
 @skill("codex_export", "Export your personal fan wiki as Markdown files, so `libra kb add` can index and "

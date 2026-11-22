@@ -25,6 +25,10 @@ from . import home
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 
+# Canon tiers, kept separate so official lore, other authors' fanon and your own canon never blur together.
+CANON_TIERS = {"official": "Official canon", "fanon": "Fanon (other authors)", "mine": "Your canon"}
+DEFAULT_TIER = "mine"
+
 
 def base() -> str:
     return home.path("codex")
@@ -56,12 +60,16 @@ def exists(slug: str) -> bool:
 
 
 def save(title: str, kind: str = "", fields: dict | None = None, body: str = "",
-         categories: list | None = None, image: str | None = None, slug: str = "") -> dict:
-    """Create or update an entry. ``image`` is a path to copy into the codex. Returns the stored entry."""
+         categories: list | None = None, image: str | None = None, slug: str = "",
+         canon: str = DEFAULT_TIER, source: str = "") -> dict:
+    """Create or update an entry. ``image`` is a path to copy into the codex. ``canon`` is the tier
+    (official / fanon / mine) and ``source`` where the lore came from. Returns the stored entry."""
+    if canon not in CANON_TIERS:
+        raise ValueError(f"canon must be one of {', '.join(CANON_TIERS)} (got {canon!r})")
     slug = slug or slugify(title)
     entry = get(slug) or {"slug": slug}
     entry.update({"title": title, "kind": kind, "fields": dict(fields or {}), "body": body,
-                  "categories": list(categories or []),
+                  "categories": list(categories or []), "canon": canon, "source": source,
                   "updated": datetime.datetime.now().isoformat(timespec="seconds")})
     if image:
         image = os.path.expanduser(image)
@@ -122,13 +130,29 @@ def _haystack(entry: dict) -> str:
     return " ".join(parts).lower()
 
 
-def search(query: str, limit: int = 8) -> list:
-    """Entries ranked by how many query terms they contain (title and categories weighted)."""
+def conflicts(existing: dict, new_fields: dict) -> dict:
+    """Fields whose stored value would change — a change to established lore. ``{key: (old, new)}``."""
+    old = existing.get("fields", {})
+    return {k: (old[k], new_fields[k]) for k in new_fields if k in old and str(old[k]) != str(new_fields[k])}
+
+
+def by_tier() -> dict:
+    """All entries grouped by canon tier, in tier order (official, fanon, mine)."""
+    groups: dict = {t: [] for t in CANON_TIERS}
+    for entry in all_entries():
+        groups.setdefault(entry.get("canon", DEFAULT_TIER), []).append(entry)
+    return {t: v for t, v in groups.items() if v}
+
+
+def search(query: str, limit: int = 8, tier: str = "") -> list:
+    """Entries ranked by how many query terms they contain (title and categories weighted). ``tier``
+    (official/fanon/mine), if given, keeps only that canon tier."""
+    pool = [e for e in all_entries() if not tier or e.get("canon", DEFAULT_TIER) == tier]
     terms = [t for t in re.split(r"\s+", query.lower().strip()) if t]
     if not terms:
-        return all_entries()[:limit]
+        return pool[:limit]
     scored = []
-    for entry in all_entries():
+    for entry in pool:
         hay = _haystack(entry)
         title = (entry.get("title", "") + " " + " ".join(entry.get("categories", []))).lower()
         score = sum(hay.count(t) for t in terms) + 3 * sum(t in title for t in terms)
@@ -156,12 +180,16 @@ def to_record(entry: dict) -> dict:
 def to_markdown(entry: dict) -> str:
     """An entry as Markdown, for the knowledge base to ingest and cite."""
     lines = [f"# {entry.get('title', '')}"]
-    if entry.get("kind"):
-        lines.append(f"*{entry['kind']}*")
+    tier = CANON_TIERS.get(entry.get("canon", DEFAULT_TIER), "")
+    sub = " · ".join(x for x in (entry.get("kind"), tier) if x)
+    if sub:
+        lines.append(f"*{sub}*")
     if entry.get("body"):
         lines += ["", entry["body"]]
     if entry.get("fields"):
         lines += [""] + [f"- **{k}:** {v}" for k, v in entry["fields"].items()]
     if entry.get("categories"):
         lines += ["", "Categories: " + ", ".join(entry["categories"])]
+    if entry.get("source"):
+        lines += ["", f"Source: {entry['source']}"]
     return "\n".join(lines)

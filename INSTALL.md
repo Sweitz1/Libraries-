@@ -381,7 +381,7 @@ systemctl list-timers 'libra-*'             # when they run next
 
 ---
 
-## 9. Learn from the web, and your own wiki (optional plugins)
+## Optional: learn from the web, and your own wiki (plugins)
 
 Libra can build training data straight from the internet and from documents, and keep a personal fan wiki
 it pulls from. The core needs nothing extra; the richer sources are **optional plugins** you enable once.
@@ -412,7 +412,7 @@ libra skill list                              # see what's available
 | `lorebook` (`worldbook`, `worldbook_search`, `world_build`) | structured lore/specs from Fandom/MediaWiki fan wikis; search and build a combined world file |
 | `fanfiction` (`fic_meta`, `fic_community`, `fic_text`, `fic_spec`, `fic_progression`) | fanfiction.net metadata, a fan-ship spec sheet from a story's codex, and a character's progression |
 | `cards` (`card`) | render a Fandom-style spec/character card as PNG (native) or SVG |
-| `codex` (`codex_add`, `codex_search`, `codex_card`, `codex_import`, `codex_export`, `codex_serve`) | a **personal fan wiki** under `~/.libra/codex` — add entries and images, browse them at a local website, and have the AI pull from them |
+| `codex` (`codex_add`, `codex_search`, `codex_card`, `codex_import`, `codex_export`, `codex_serve`, `codex_build`) | a **living lorebook** under `~/.libra/codex` — entries with a canon tier (official / fanon / yours) and source, contradiction flagging before established lore changes, a local browsable site (`codex_serve`), and a static wiki site generated from it (`codex_build`) |
 
 `codex_serve` runs a browsable local site (`http://127.0.0.1:8800/`) whose MediaWiki-compatible `api.php`
 lets `worldbook`/`world_build` read your own codex like a Fandom wiki. It binds to localhost; don't expose

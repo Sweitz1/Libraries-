@@ -67,6 +67,9 @@ margin:4px 0 10px;background:var(--bg);color:inherit}}
 button{{font:inherit;background:var(--accent);color:var(--accentink);border:0;border-radius:8px;cursor:pointer;
 padding:10px 20px;font-weight:600}}
 .muted{{color:var(--muted)}}
+.badge{{display:inline-block;font-size:12px;font-weight:700;padding:2px 9px;border-radius:12px;vertical-align:middle}}
+.b-official{{background:#1f5fbf;color:#fff}}.b-fanon{{background:#8a5a1f;color:#fff}}.b-mine{{background:#2e7d4f;color:#fff}}
+.tiergroup{{margin:22px 0 6px;font-weight:800;font-size:15px;display:flex;align-items:center;gap:8px}}
 @media(max-width:640px){{.portable-infobox{{float:none;width:auto;margin:0 0 16px}}.wrap{{padding:16px}}}}
 </style></head><body><header class=site><a href="/">&#128214; Codex</a>
 <form class=s method=get action="/"><input name=q placeholder="Search the codex…"></form></header>
@@ -120,10 +123,19 @@ def _infobox_html(entry: dict) -> str:
         cap = html.escape(entry.get("kind") or "")
         parts.append(f'<figure class="pi-image"><img src="/{html.escape(entry["image"])}" alt="">'
                      + (f'<figcaption class="pi-image-caption">{cap}</figcaption>' if cap else "") + "</figure>")
+    tier = codex.CANON_TIERS.get(entry.get("canon", codex.DEFAULT_TIER), "")
+    overview = []
     if entry.get("kind"):
-        parts.append('<div class="pi-header">Overview</div>'
-                     f'<div class="pi-item pi-data"><h3 class="pi-data-label">Type</h3>'
-                     f'<div class="pi-data-value">{html.escape(entry["kind"])}</div></div>')
+        overview.append(("Type", html.escape(entry["kind"])))
+    overview.append(("Canon", html.escape(tier)))
+    if entry.get("source"):
+        src = html.escape(entry["source"])
+        val = f'<a href="{src}" rel="nofollow">{src}</a>' if re.match(r"https?://", entry["source"]) else src
+        overview.append(("Source", val))
+    parts.append('<div class="pi-header">Overview</div>')
+    for label, value in overview:
+        parts.append(f'<div class="pi-item pi-data"><h3 class="pi-data-label">{label}</h3>'
+                     f'<div class="pi-data-value">{value}</div></div>')
     for key, value in entry.get("fields", {}).items():
         parts.append(f'<div class="pi-item pi-data"><h3 class="pi-data-label">{html.escape(str(key))}</h3>'
                      f'<div class="pi-data-value">{html.escape(str(value))}</div></div>')
@@ -164,9 +176,11 @@ def _body_html(body: str) -> str:
 
 
 def _render_entry(entry: dict) -> str:
-    infobox = _infobox_html(entry) if (entry.get("fields") or entry.get("image") or entry.get("kind")) else ""
+    infobox = _infobox_html(entry)
     lead = f'<div class="lead">{_body_html(entry["body"])}</div>' if entry.get("body") else ""
-    tagline = f'<div class="tagline">{html.escape(entry.get("kind") or "entry")}</div>'
+    tier = entry.get("canon", codex.DEFAULT_TIER)
+    badge = f'<span class="badge b-{tier}">{html.escape(codex.CANON_TIERS.get(tier, tier))}</span>'
+    tagline = f'<div class="tagline">{html.escape(entry.get("kind") or "entry")} {badge}</div>'
     cats = ('<div class="catbar"><b>Categories:</b> '
             + " &middot; ".join(f'<a href="/?q={html.escape(c)}">{html.escape(c)}</a>' for c in entry["categories"])
             + "</div>" if entry.get("categories") else "")
@@ -175,24 +189,52 @@ def _render_entry(entry: dict) -> str:
             f'{infobox}{lead}{empty}{cats}</article>')
 
 
-def _render_index(entries: list, query: str = "") -> str:
-    cards = "".join(f'<a class="card" href="/wiki/{html.escape(e["slug"])}"><div class="t">{html.escape(e["title"])}'
-                    f'</div><div class="k">{html.escape(e.get("kind") or "entry")}</div></a>' for e in entries)
-    listing = (f'<ul class="entries">{cards}</ul>' if cards
-               else '<p class="muted">No entries yet — add one below.</p>')
-    form = ('<div class="box"><h2>Add / update an entry</h2>'
+def _card_link(e: dict, href: str) -> str:
+    tier = e.get("canon", codex.DEFAULT_TIER)
+    return (f'<a class="card" href="{href}"><div class="t">{html.escape(e["title"])}</div>'
+            f'<div class="k">{html.escape(e.get("kind") or "entry")} '
+            f'<span class="badge b-{tier}">{html.escape(codex.CANON_TIERS.get(tier, tier))}</span></div></a>')
+
+
+def _grouped_listing(entries: list, href) -> str:
+    """Entries grouped by canon tier (official, fanon, mine)."""
+    if not entries:
+        return '<p class="muted">No entries yet — add one below.</p>'
+    by: dict = {}
+    for e in entries:
+        by.setdefault(e.get("canon", codex.DEFAULT_TIER), []).append(e)
+    out = []
+    for tier in codex.CANON_TIERS:
+        if by.get(tier):
+            out.append(f'<div class="tiergroup"><span class="badge b-{tier}">'
+                       f'{html.escape(codex.CANON_TIERS[tier])}</span></div>')
+            out.append('<ul class="entries">' + "".join(_card_link(e, href(e)) for e in by[tier]) + "</ul>")
+    return "".join(out)
+
+
+def _add_form() -> str:
+    opts = "".join(f'<option value="{t}"{" selected" if t == codex.DEFAULT_TIER else ""}>'
+                   f'{html.escape(codex.CANON_TIERS[t])}</option>' for t in codex.CANON_TIERS)
+    return ('<div class="box"><h2>Add / update an entry</h2>'
             '<form method=post action="/add" enctype="multipart/form-data">'
             '<label>Title</label><input name=title required>'
             '<label>Kind</label><input name=kind placeholder="character / item / tech / ship / place">'
+            f'<label>Canon tier</label><select name=canon>{opts}</select>'
+            '<label>Source (where this lore came from)</label><input name=source placeholder="e.g. a wiki URL">'
             '<label>Fields (one per line, key = value) — these become the infobox table</label>'
             '<textarea name=fields rows=5 placeholder="class = BC-304&#10;crew = 200"></textarea>'
             '<label>Description (use == Heading == for sections)</label><textarea name=body rows=5></textarea>'
             '<label>Categories (comma-separated)</label><input name=categories>'
             '<label>Image</label><input type=file name=image accept="image/*">'
             '<button type=submit>Save entry</button></form></div>')
+
+
+def _render_index(entries: list, query: str = "") -> str:
+    listing = _grouped_listing(entries, lambda e: "/wiki/" + html.escape(e["slug"]))
     heading = f"Search: {html.escape(query)}" if query else "Your codex"
     count = f'<span class="muted"> &mdash; {len(entries)} entr{"y" if len(entries) == 1 else "ies"}</span>'
-    return f'<h1 class="page">{html.escape(heading)}{count}</h1><div style="height:12px"></div>{listing}{form}'
+    return (f'<h1 class="page">{html.escape(heading)}{count}</h1><div style="height:12px"></div>'
+            f'{listing}{_add_form()}')
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -285,8 +327,12 @@ class _Handler(BaseHTTPRequestHandler):
                 with open(tmp, "wb") as f:
                     f.write(data)
                 image_path = tmp
+        tier = (fields.get("canon") or codex.DEFAULT_TIER).strip().lower()
+        if tier not in codex.CANON_TIERS:
+            tier = codex.DEFAULT_TIER
         entry = codex.save(title, kind=fields.get("kind", "").strip(), fields=field_map,
-                           body=fields.get("body", "").strip(), categories=cats, image=image_path)
+                           body=fields.get("body", "").strip(), categories=cats, image=image_path,
+                           canon=tier, source=fields.get("source", "").strip())
         if image_path and os.path.isfile(image_path):
             os.remove(image_path)
         self.send_response(303)                                # redirect to the new entry
@@ -296,3 +342,47 @@ class _Handler(BaseHTTPRequestHandler):
 
 def make_server(host: str = "127.0.0.1", port: int = 8800) -> ThreadingHTTPServer:
     return ThreadingHTTPServer((host, port), _Handler)
+
+
+# -------------------------------------------------- static site generation
+def _static_shell(title: str, inner: str) -> str:
+    """The page shell for the static build: home points at index.html, no live search/forms."""
+    page = _PAGE.replace('<a href="/">&#128214; Codex</a>\n'
+                         '<form class=s method=get action="/"><input name=q placeholder="Search the codex…"></form>',
+                         '<a href="index.html">&#128214; Codex</a>')
+    return page.format(title=html.escape(title), body=inner)
+
+
+def build_site(out_dir: str) -> dict:
+    """Generate the whole codex as a static, text-only wiki site (index + a page per entry + images).
+
+    The lorebook is the single source of truth; this renders it, so the two never drift. Returns a small
+    report. Hostable on any static host; no server, no image model, no JavaScript."""
+    import shutil
+
+    entries = codex.all_entries()
+    pages_dir = os.path.join(out_dir, "wiki")
+    os.makedirs(pages_dir, exist_ok=True)
+    # images (referenced by the entry pages as ../images/...)
+    src_images = os.path.join(codex.base(), "images")
+    if os.path.isdir(src_images):
+        dst_images = os.path.join(out_dir, "images")
+        os.makedirs(dst_images, exist_ok=True)
+        for name in os.listdir(src_images):
+            shutil.copyfile(os.path.join(src_images, name), os.path.join(dst_images, name))
+
+    for entry in entries:                                        # one article page per entry
+        article = _render_entry(entry)
+        # rewrite server paths to static, relative ones (pages live in wiki/)
+        article = article.replace('src="/images/', 'src="../images/')
+        article = re.sub(r'href="/\?q=[^"]*"', 'href="../index.html"', article)   # category links → home
+        html_doc = _static_shell(entry.get("title", "Entry"), article).replace('href="index.html"', 'href="../index.html"')
+        with open(os.path.join(pages_dir, entry["slug"] + ".html"), "w", encoding="utf-8") as f:
+            f.write(html_doc)
+
+    listing = _grouped_listing(entries, lambda e: "wiki/" + e["slug"] + ".html")
+    index = (f'<h1 class="page">Codex<span class="muted"> &mdash; {len(entries)} '
+             f'entr{"y" if len(entries) == 1 else "ies"}</span></h1>{listing}')
+    with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(_static_shell("Codex", index))
+    return {"dir": out_dir, "entries": len(entries), "index": os.path.join(out_dir, "index.html")}
