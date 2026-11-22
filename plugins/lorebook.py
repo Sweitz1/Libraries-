@@ -23,15 +23,18 @@ from __future__ import annotations
 
 import json
 import re
-from urllib.parse import quote, unquote, urlencode, urlsplit
+from urllib.parse import urlsplit
 
+from libra import wiki as _wiki
 from libra.skills import SkillResult, fetcher, skill
 
-# Fields that are layout/boilerplate rather than lore, dropped from the card.
-_SKIP_KEYS = {"image", "image1", "imagewidth", "imagecaption", "imagebg", "caption", "logo", "cols",
-              "title", "titlestyle", "headerstyle", "labelstyle", "datastyle", "float", "align", "width",
-              "bodystyle", "row1", "pagename", "name"}
-_FILE_RE = re.compile(r"^(?:file:|image:|\[\[file:)|\.(?:png|jpe?g|gif|svg|webp)$", re.I)
+# The MediaWiki transport and wikitext parsing live in libra.wiki; these short names are what the code
+# below (and the tests) use.
+_SKIP_KEYS, _FILE_RE = _wiki.SKIP_KEYS, _wiki.FILE_RE
+_iter_templates, _split_params, _strip_wiki = _wiki.iter_templates, _wiki.split_params, _wiki.strip_wiki
+_infobox_fields, _remove_blocks, _lead_summary = _wiki.infobox_fields, _wiki.remove_blocks, _wiki.lead_summary
+_wiki_targets, _api_parse, _api_candidates = _wiki.wiki_targets, _wiki.api_parse, _wiki.api_candidates
+_api_search, _article_url, _resolve_api = _wiki.api_search, _wiki.article_url, _wiki.resolve_api
 
 # What kind of thing the page is, guessed from the infobox name or categories.
 _KIND_HINTS = [
@@ -52,157 +55,6 @@ def _guess_kind(name: str, categories: list) -> str:
         if any(w in hay for w in words):
             return kind
     return "entry"
-
-
-# --------------------------------------------------------------- wikitext
-def _iter_templates(text: str):
-    """Yield each top-level ``{{…}}`` template (braces included), honouring nesting."""
-    i, n = 0, len(text)
-    while i < n:
-        if text[i:i + 2] == "{{":
-            depth, j = 1, i + 2
-            while j < n and depth:
-                two = text[j:j + 2]
-                if two == "{{":
-                    depth += 1
-                    j += 2
-                elif two == "}}":
-                    depth -= 1
-                    j += 2
-                else:
-                    j += 1
-            yield text[i:j]
-            i = j
-        else:
-            i += 1
-
-
-def _split_params(body: str) -> list:
-    """Split a template body on top-level ``|``, ignoring ``|`` inside nested templates, links and tables."""
-    parts, depth, i, n, cur = [], 0, 0, len(body), []
-    while i < n:
-        two = body[i:i + 2]
-        if two in ("{{", "[[", "{|"):
-            depth += 1
-            cur.append(two)
-            i += 2
-            continue
-        if two in ("}}", "]]", "|}"):
-            depth = max(0, depth - 1)
-            cur.append(two)
-            i += 2
-            continue
-        ch = body[i]
-        if ch == "|" and depth == 0:
-            parts.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-        i += 1
-    parts.append("".join(cur))
-    return parts
-
-
-def _strip_wiki(v: str) -> str:
-    """Turn a wikitext value into plain text."""
-    v = re.sub(r"<ref[^>]*>.*?</ref>", "", v, flags=re.S | re.I)
-    v = re.sub(r"<ref[^>]*/>", "", v, flags=re.I)
-    v = re.sub(r"<br\s*/?>", ", ", v, flags=re.I)
-    v = re.sub(r"<!--.*?-->", "", v, flags=re.S)
-    v = re.sub(r"<[^>]+>", "", v)                                 # any other HTML tag
-    while re.search(r"\{\{[^{}]*\}\}", v):                        # drop templates, innermost first
-        v = re.sub(r"\{\{[^{}]*\}\}", " ", v)
-    v = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", v)            # [[target|label]] -> label
-    v = re.sub(r"\[\[([^\]]*)\]\]", r"\1", v)                     # [[target]] -> target
-    v = re.sub(r"\[https?://\S+\s+([^\]]*)\]", r"\1", v)          # [url label] -> label
-    v = re.sub(r"\[https?://\S+\]", "", v)
-    v = v.replace("'''", "").replace("''", "")                   # bold / italic
-    v = re.sub(r"(?m)^\s*[\*#:;]+\s*", "", v)                     # list bullets
-    v = re.sub(r"\s*\n\s*", ", ", v.strip())                     # multi-line value -> comma list
-    return re.sub(r"\s+", " ", v).strip(" ,;")
-
-
-def _infobox_fields(wikitext: str) -> tuple:
-    """(infobox name, {field: value}) from the first ``{{Infobox …}}`` template, or ("", {})."""
-    for tmpl in _iter_templates(wikitext):
-        params = _split_params(tmpl[2:-2])
-        name = params[0].strip()
-        if "infobox" not in name.lower():
-            continue
-        fields = {}
-        for param in params[1:]:
-            if "=" not in param:
-                continue
-            key, _, raw = param.partition("=")
-            key = key.strip()
-            if not key or key.lower() in _SKIP_KEYS:
-                continue
-            val = _strip_wiki(raw)
-            if val and not _FILE_RE.search(val) and len(val) < 400:
-                fields[key] = val
-        return name, fields
-    return "", {}
-
-
-def _remove_blocks(text: str) -> str:
-    """Strip whole ``{{…}}`` templates and ``{| … |}`` tables so only prose is left."""
-    while re.search(r"\{\{[^{}]*\}\}", text):
-        text = re.sub(r"\{\{[^{}]*\}\}", " ", text)
-    text = re.sub(r"\{\|.*?\|\}", " ", text, flags=re.S)
-    return text
-
-
-def _lead_summary(wikitext: str, limit: int = 600) -> str:
-    """The opening prose of a wiki article, markup removed, up to a few sentences."""
-    head = re.split(r"\n==", wikitext, maxsplit=1)[0]
-    head = _remove_blocks(head)
-    head = re.sub(r"(?m)^\s*__[A-Z]+__\s*$", "", head)           # magic words like __NOTOC__
-    text = _strip_wiki(head).strip()
-    if len(text) <= limit:
-        return text
-    cut = text[:limit]
-    dot = cut.rfind(". ")
-    return (cut[:dot + 1] if dot > limit // 2 else cut).strip() + " …"
-
-
-# ------------------------------------------------------------- MediaWiki API
-def _wiki_targets(url: str):
-    """For a ``…/wiki/<Title>`` URL, yield (api_url, page_title) candidates to try."""
-    parts = urlsplit(url)
-    if not parts.scheme.startswith("http"):
-        return
-    m = re.match(r"(.*/)wiki/([^?#]+)", parts.path)
-    if not m:
-        return
-    title = unquote(m.group(2)).replace("_", " ")
-    base = f"{parts.scheme}://{parts.netloc}"
-    prefix = m.group(1)                                          # e.g. "/" (Fandom) or "/w/" (some wikis)
-    seen = set()
-    for api_path in (prefix + "api.php", "/w/api.php", "/api.php"):
-        api = base + re.sub(r"//+", "/", api_path)
-        if api not in seen:
-            seen.add(api)
-            yield api, title
-
-
-def _api_parse(api: str, title: str, fetch) -> dict | None:
-    """Ask a MediaWiki API for a page's wikitext and categories. None if it isn't a MediaWiki API."""
-    query = urlencode({"action": "parse", "page": title, "redirects": "1",
-                       "prop": "wikitext|categories|displaytitle", "format": "json", "formatversion": "2"})
-    try:
-        resp = fetch(api + "?" + query)
-    except Exception:
-        return None
-    if resp.status != 200 or "json" not in resp.content_type and not resp.text.lstrip().startswith("{"):
-        return None
-    try:
-        data = json.loads(resp.text)
-    except (ValueError, json.JSONDecodeError):
-        return None
-    parse = data.get("parse")
-    if not isinstance(parse, dict) or "wikitext" not in parse:
-        return None
-    return parse
 
 
 def _card_from_parse(parse: dict, url: str) -> dict:
@@ -227,50 +79,6 @@ def _wiki_entry(url: str, fetch) -> dict | None:
 
 
 # ----------------------------------------------------- search & world build
-def _api_candidates(wiki: str):
-    """Yield the MediaWiki ``api.php`` URLs to try for a wiki, from a domain or any page URL."""
-    parts = urlsplit(wiki if re.match(r"https?://", wiki, re.I) else "https://" + wiki)
-    if not parts.netloc:
-        return
-    base = f"{parts.scheme}://{parts.netloc}"
-    prefixes = []
-    m = re.match(r"(.*/)wiki/", parts.path)
-    if m:
-        prefixes.append(m.group(1))
-    prefixes += ["/", "/w/"]
-    seen = set()
-    for p in prefixes:
-        api = base + re.sub(r"//+", "/", p + "api.php")
-        if api not in seen:
-            seen.add(api)
-            yield api
-
-
-def _api_search(api: str, query: str, limit: int, fetch) -> list | None:
-    """Full-text search a MediaWiki, returning page titles. None if this isn't a MediaWiki search API."""
-    q = urlencode({"action": "query", "list": "search", "srsearch": query, "srlimit": str(max(1, limit)),
-                   "srnamespace": "0", "srprop": "", "format": "json", "formatversion": "2"})
-    try:
-        resp = fetch(api + "?" + q)
-    except Exception:
-        return None
-    if resp.status != 200:
-        return None
-    try:
-        data = json.loads(resp.text)
-    except (ValueError, json.JSONDecodeError):
-        return None
-    search = data.get("query", {}).get("search") if isinstance(data.get("query"), dict) else None
-    if search is None:
-        return None
-    return [row.get("title", "") for row in search if isinstance(row, dict) and row.get("title")]
-
-
-def _article_url(api: str, title: str) -> str:
-    parts = urlsplit(api)
-    return f"{parts.scheme}://{parts.netloc}/wiki/" + quote(title.replace(" ", "_"), safe="/:()")
-
-
 def _pull_titles(api: str, titles: list, fetch, seen: set, limit: int) -> list:
     """Fetch and card-ify each title (skipping ones with no infobox and no summary, and duplicates)."""
     cards = []
@@ -285,14 +93,6 @@ def _pull_titles(api: str, titles: list, fetch, seen: set, limit: int) -> list:
         if card["fields"] or card["summary"]:
             cards.append(card)
     return cards
-
-
-def _resolve_api(wiki: str, probe: str, fetch) -> str | None:
-    """Find the working api.php for a wiki by trying a search against each candidate."""
-    for api in _api_candidates(wiki):
-        if _api_search(api, probe or "a", 1, fetch) is not None:
-            return api
-    return None
 
 
 def _parse_seeds(seeds: str) -> list:

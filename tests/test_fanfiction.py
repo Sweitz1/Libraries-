@@ -10,6 +10,7 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -204,14 +205,128 @@ class CommunityTest(unittest.TestCase):
         self.assertIn("No stories found", r.text)
 
 
+STORY_CODEX = """<!doctype html><html><head><title>Ragnarok Rising, a Stargate + BSG crossover</title></head>
+<body>
+<div id=pre_story_links><span>
+  <a class=xcontrast_txt href=/Stargate-and-Battlestar-Galactica-Crossovers/>Stargate + Battlestar Galactica Crossover</a></span></div>
+<div id=storytext class='storytext xcontrast_txt nocopy'>
+<p>The Ragnarok hung in high orbit, the largest warship humanity had ever built.</p>
+<p>BS Ragnarok — Technical Readout</p>
+<p>Class: Battlestar/Daedalus hybrid</p>
+<p>Length: 1,900 meters</p>
+<p>Primary Armament: 32 Asgard plasma beam cannons</p>
+<p>Point Defense: Naquadah-enhanced railguns</p>
+<p>FTL: Modified Mark III jump drive</p>
+<p>Fighter Complement: 40 Vipers</p>
+<p>Crew: 2,500</p>
+<p>Shields: Asgard shield grid</p>
+<p>Captain Shepard looked out at the stars and wondered what would come next for them all.</p>
+</div></body></html>"""
+
+SG_WIKI = {"stargate.fandom.com": {
+    "search": {"Asgard": ["Asgard"], "Daedalus": ["Daedalus (BC-304)"], "Naquadah": ["Naquadah"],
+               "Battlestar": [], "Vipers": []},
+    "pages": {"Asgard": "The '''Asgard''' are an advanced benevolent race allied with Earth.",
+              "Daedalus (BC-304)": "The '''Daedalus''' is a BC-304 battlecruiser of the Tau'ri.",
+              "Naquadah": "'''Naquadah''' is a dense mineral central to Goa'uld technology."}}}
+
+
+class RouterFake:
+    """Returns the fic HTML for fanfiction.net and MediaWiki JSON for a wiki host."""
+
+    def __init__(self, fic_html, wikis):
+        self.fic_html, self.wikis, self.calls = fic_html, wikis, []
+
+    def get(self, url):
+        self.calls.append(url)
+        parts = urlsplit(url)
+        if parts.netloc.endswith("fanfiction.net"):
+            return Resp(self.fic_html)
+        q = {k: v[0] for k, v in parse_qs(parts.query).items()}
+        wiki = self.wikis.get(parts.netloc)
+        if wiki is None:
+            return Resp("nope", status=404)
+        if q.get("list") == "search":
+            titles = wiki["search"].get(q.get("srsearch", ""), [])
+            return Resp(json.dumps({"query": {"search": [{"title": t} for t in titles]}}),
+                        content_type="application/json")
+        if q.get("action") == "parse":
+            wt = wiki["pages"].get(q.get("page", ""))
+            if wt is None:
+                return Resp(json.dumps({"error": {"code": "missingtitle"}}), content_type="application/json")
+            return Resp(json.dumps({"parse": {"title": q["page"], "displaytitle": q["page"], "wikitext": wt,
+                        "categories": []}}), content_type="application/json")
+        return Resp("{}", content_type="application/json")
+
+
+class SpecSheetTest(unittest.TestCase):
+    def setUp(self):
+        self.m = load()
+
+    def patch(self, fake):
+        return mock.patch.object(self.m, "fetcher", lambda **kw: fake)
+
+    def test_fic_text_returns_the_story_prose(self):
+        with self.patch(RouterFake(STORY_CODEX, {})):
+            r = self.m.fic_text("https://www.fanfiction.net/s/11111/7/")
+        self.assertTrue(r.ok)
+        self.assertIn("Ragnarok hung in high orbit", r.text)
+        self.assertIn("Technical Readout", r.text)
+
+    def test_spec_sheet_from_codex(self):
+        with self.patch(RouterFake(STORY_CODEX, {})):
+            r = self.m.fic_spec("https://www.fanfiction.net/s/11111/7/", "Ragnarok")
+        self.assertTrue(r.ok)
+        d = r.data
+        self.assertEqual(d["specs"]["Length"], "1,900 meters")
+        self.assertEqual(d["specs"]["Crew"], "2,500")
+        self.assertEqual(d["specs"]["Primary Armament"], "32 Asgard plasma beam cannons")
+        self.assertIn("Fighter Complement", d["specs"])
+        self.assertNotIn("BS Ragnarok", d["specs"])             # the header line isn't a spec row
+        self.assertIn("Technical Readout", d["heading"])
+        self.assertNotIn("canon", d)                            # no wikis given
+        for want in ("Asgard", "Naquadah", "Vipers"):
+            self.assertIn(want, d["mentions"])
+        self.assertNotIn("III", d["mentions"])                 # roman-numeral noise filtered
+        self.assertIn("## Specifications", r.text)
+
+    def test_spec_sheet_cross_references_canon_wikis(self):
+        fake = RouterFake(STORY_CODEX, SG_WIKI)
+        with self.patch(fake):
+            r = self.m.fic_spec("https://www.fanfiction.net/s/11111/7/", "Ragnarok",
+                                wikis="https://stargate.fandom.com")
+        self.assertTrue(r.ok)
+        canon = r.data["canon"]
+        self.assertIn("Asgard", canon)
+        self.assertEqual(canon["Asgard"]["title"], "Asgard")
+        self.assertIn("advanced benevolent race", canon["Asgard"]["summary"])
+        self.assertEqual(canon["Daedalus"]["title"], "Daedalus (BC-304)")
+        self.assertIn("## Canon cross-reference", r.text)
+
+    def test_no_codex_block_is_reported(self):
+        plain = ("<html><body><div id=storytext><p>Just a normal story paragraph with no specs at all, "
+                 "going on for a while about the characters.</p></div></body></html>")
+        with self.patch(RouterFake(plain, {})):
+            r = self.m.fic_spec("https://www.fanfiction.net/s/11111/7/", "Ragnarok")
+        self.assertFalse(r.ok)
+        self.assertIn("codex", r.text)
+
+    def test_bot_check_reported(self):
+        with self.patch(RouterFake(BOT_CHECK, {})):
+            r = self.m.fic_spec("https://www.fanfiction.net/s/11111/7/", "Ragnarok")
+        self.assertFalse(r.ok)
+        self.assertIn("bot-check", r.text)
+
+
 class RegistrationTest(unittest.TestCase):
     def test_registration_and_outside_content(self):
         from libra.skills import SkillRegistry
 
         reg = SkillRegistry()
         got = reg.load_plugins([os.path.join(ROOT, "plugins")], log=None)
-        self.assertEqual({"fic_meta", "fic_community"} & set(got), {"fic_meta", "fic_community"})
-        for name in ("fic_meta", "fic_community"):
+        want = {"fic_meta", "fic_community", "fic_text", "fic_spec"}
+        self.assertEqual(want & set(got), want)
+        for name in ("fic_meta", "fic_community", "fic_text", "fic_spec"):
             sk = reg.get(name)
             self.assertTrue(sk.untrusted_output)                    # web content marked outside
             self.assertEqual((sk.risk, sk.claimed_risk), ("write", "read"))  # held until accepted
