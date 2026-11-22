@@ -1,0 +1,16 @@
+#!/bin/sh
+# Libra Debian package: reload systemd on removal; on purge, remove data, token and the service user.
+set -e
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+if [ "$1" = "purge" ]; then
+  rm -rf /var/lib/libra /etc/libra
+  if id libra >/dev/null 2>&1; then
+    deluser --system libra >/dev/null 2>&1 || userdel libra >/dev/null 2>&1 || true
+  fi
+fi
+
+exit 0

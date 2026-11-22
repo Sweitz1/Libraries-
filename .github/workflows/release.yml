@@ -1,8 +1,8 @@
 name: release
 
 # Pushing a tag like v0.16.0 builds everything and publishes:
-#   a GitHub release with the Python packages (wheel and source), libra.apk, the Java client jar
-#   and SHA256SUMS, and the Java client (ai.libra:libra-client) to GitHub Packages.
+#   a GitHub release with the Python packages (wheel and source), the Debian package (libra_*_all.deb),
+#   libra.apk, the Java client jar and SHA256SUMS, and the Java client (ai.libra:libra-client) to GitHub Packages.
 on:
   push:
     tags: ['v*.*.*', 'V*.*.*']   # a capital V only runs the check below, which explains and stops
@@ -92,6 +92,27 @@ jobs:
           name: android-apk
           path: out/
 
+  debian:
+    needs: tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the Debian package (.deb)
+        run: bash packaging/build-deb.sh --out out
+      - name: It is a valid package of the tagged version
+        run: |
+          dpkg-deb --info out/*.deb
+          dpkg-deb --contents out/*.deb > contents.txt
+          grep -q ' ./usr/bin/libra$' contents.txt
+          grep -q ' ./usr/share/libra/plugins/codex.py$' contents.txt
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            test "libra_$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)_all.deb" = "$(basename out/*.deb)"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: out/
+
   java:
     needs: tag
     runs-on: ubuntu-latest
@@ -136,7 +157,7 @@ jobs:
           path: out/
 
   publish:
-    needs: [python, android, java]
+    needs: [python, debian, android, java]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

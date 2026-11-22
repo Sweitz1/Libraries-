@@ -181,6 +181,25 @@ class TokenAndInstallerTest(unittest.TestCase):
         bad = subprocess.run(["bash", script, "--root", "/tmp/x", "--train-at", "25:00"], capture_output=True, text=True)
         self.assertNotEqual(bad.returncode, 0)
         self.assertIn("HH:MM", bad.stderr)
+        bad2 = subprocess.run(["bash", script, "--root", "/tmp/x", "--codex-port", "0"], capture_output=True, text=True)
+        self.assertNotEqual(bad2.returncode, 0)
+        self.assertIn("codex-port", bad2.stderr)
+
+    def test_full_install_rehearsal_sets_up_plugins_and_codex(self):
+        import tempfile
+
+        script = os.path.join(ROOT, "deploy", "install-debian.sh")
+        with tempfile.TemporaryDirectory() as root:
+            r = subprocess.run(["bash", script, "--root", root, "--full", "--no-apt"],
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            units = os.path.join(root, "etc", "systemd", "system")
+            self.assertTrue(os.path.isfile(os.path.join(units, "libra-codex.service")))
+            plugins = os.path.join(root, "var", "lib", "libra", "home", "plugins")
+            for name in ("codex.py", "lorebook.py", "fanfiction.py", "cards.py"):
+                self.assertTrue(os.path.isfile(os.path.join(plugins, name)), name)
+            with open(os.path.join(units, "libra-codex.service"), encoding="utf-8") as f:
+                self.assertIn("run codex_serve", f.read())
 
 
 if __name__ == "__main__":

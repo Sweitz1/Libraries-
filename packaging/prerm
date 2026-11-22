@@ -1,0 +1,11 @@
+#!/bin/sh
+# Libra Debian package: stop and disable the services before removal.
+set -e
+
+if [ -d /run/systemd/system ]; then
+  systemctl disable --now libra.service libra-codex.service >/dev/null 2>&1 || true
+  systemctl disable --now libra-auto.timer libra-agent.timer >/dev/null 2>&1 || true
+  systemctl disable --now libra-discord.service >/dev/null 2>&1 || true
+fi
+
+exit 0

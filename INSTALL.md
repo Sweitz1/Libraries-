@@ -70,6 +70,11 @@ The only thing it downloads is NumPy. Each [release](https://github.com/Sweitz1/
 has a ready-made wheel (`pip install libra_lm-*.whl`) and a `SHA256SUMS` file to check it with
 (`sha256sum -c --ignore-missing SHA256SUMS`).
 
+**Prefer a Debian package?** On a Raspberry Pi or Debian/Ubuntu box you can build and install a native
+`.deb` instead of the shell installer in lesson 4 — it sets up the service, plugins and lore-wiki the same
+way: `bash packaging/build-deb.sh` then `sudo apt install ./dist/libra_*_all.deb`. See
+[packaging/README.md](packaging/README.md).
+
 **Check it worked**
 
 ```bash
@@ -172,6 +177,7 @@ You'll see the services (`etc/systemd/system/libra*.service` and `.timer`), the 
 ```bash
 sudo ./deploy/install-debian.sh                 # home Wi-Fi only
 sudo ./deploy/install-debian.sh --tailscale     # also reachable from anywhere (lesson 5)
+sudo ./deploy/install-debian.sh --full           # the whole suite: all plugins + the codex lore-wiki site
 ```
 
 At the end it prints a **QR code** and the links. It sets up, all starting at boot:
@@ -181,13 +187,24 @@ At the end it prints a **QR code** and the links. It sets up, all starting at bo
 | `libra.service` | the app and API, as an unprivileged `libra` user with a read-only system |
 | `libra-agent.timer` | runs your scheduled goals every 5 minutes |
 | `libra-auto.timer` | nightly training, **off until you choose sources** in `/var/lib/libra/libra-auto.json` |
+| plugin suite | worldbuilding/lorebook, fanfiction, cards, codex and document ingest, installed to `/var/lib/libra/home/plugins` and trusted for the service (unless `--no-plugins`) |
+| `libra-codex.service` | with `--full` or `--codex`: the codex lore-wiki website, bound to `127.0.0.1:8800` (no login) |
 | avahi | announces `<machine>.local` on your Wi-Fi |
 | `/etc/libra/token` | the main token |
 | `libra-admin` | runs any `libra` command as the service, e.g. `sudo libra-admin devices list` |
 
 Useful options: `--port 8080`, `--train-at 03:00`, `--no-train`, `--no-agent`, `--no-mdns`,
-`--local-only` (for your own HTTPS proxy, see [deploy/Caddyfile](deploy/Caddyfile)), `--uninstall`
-(removes the services; your data stays).
+`--no-plugins` (skip the plugin suite), `--codex` / `--codex-port N` / `--codex-host 0.0.0.0` (the lore-wiki
+site — localhost-only by default, and it has **no authentication**, so reach it over an SSH tunnel or
+Tailscale rather than binding it to your network), `--local-only` (for your own HTTPS proxy, see
+[deploy/Caddyfile](deploy/Caddyfile)), `--uninstall` (removes the services; your data stays).
+
+The codex wiki, when on, serves the same world the service owns. Reach it from your computer with:
+
+```bash
+ssh -L 8800:127.0.0.1:8800 <you>@<machine>.local      # then open http://127.0.0.1:8800/
+sudo libra-admin skill --yes run codex_add "Thor" type=character fields="race=Asgard"   # or build it from the CLI
+```
 
 **Check it worked**
 
@@ -380,6 +397,44 @@ systemctl list-timers 'libra-*'             # when they run next
 </details>
 
 ---
+
+## Optional: learn from the web, and your own wiki (plugins)
+
+Libra can build training data straight from the internet and from documents, and keep a personal fan wiki
+it pulls from. The core needs nothing extra; the richer sources are **optional plugins** you enable once.
+
+**Train from the web** (no plugin needed):
+
+```bash
+libra data --url https://example.org/article --crawl https://example.org/docs --out data/web
+libra train data/web --out checkpoints/model        # or let `libra auto` collect → filter → train
+```
+
+`libra data` also reads local `.txt .md .html .json .jsonl .csv` and, with the document plugins below,
+`.pdf .docx .pptx .xlsx .epub .rtf` and media transcripts. Fetches honour the SSRF guard; add
+`--allow-private` only for a LAN/localhost source you trust.
+
+**Enable the plugins** — point Libra at the folder, then accept each file once (its risk labels aren't
+trusted until you do):
+
+```bash
+cp plugins/*.py ~/.libra/plugins/            # loaded automatically from here (or pass --plugins plugins/)
+libra trust accept-plugin ~/.libra/plugins/worldbook.py   # repeat per plugin you use
+libra skill list                              # see what's available
+```
+
+| Plugin | Gives you |
+|---|---|
+| `documents` (built in) / `pdf_text` / `media_text` | ingest PDFs, Office/eBook files, and image/audio/video transcripts |
+| `lorebook` (`worldbook`, `worldbook_search`, `world_build`) | structured lore/specs from Fandom/MediaWiki fan wikis; search and build a combined world file |
+| `fanfiction` (`fic_meta`, `fic_community`, `fic_text`, `fic_spec`, `fic_progression`) | fanfiction.net metadata, a fan-ship spec sheet from a story's codex, and a character's progression |
+| `cards` (`card`) | render a Fandom-style spec/character card as PNG (native) or SVG |
+| `codex` (`codex_add`, `codex_continuity`, `codex_timeline`, `codex_link`, `codex_search`, `codex_card`, `codex_import`, `codex_export`, `codex_serve`, `codex_build`) | a **lore manager & world engine** under `~/.libra/codex` — named continuities (a canon plus AUs), typed entries (characters/locations/factions/…), timelines and cross-world links, contradiction flagging before established lore changes, a local browsable site (`codex_serve`) and a static wiki generated from it (`codex_build`) |
+
+`codex_serve` runs a browsable local site (`http://127.0.0.1:8800/`) whose MediaWiki-compatible `api.php`
+lets `worldbook`/`world_build` read your own codex like a Fandom wiki. It binds to localhost; don't expose
+it on `0.0.0.0` (no auth). Libra renders cards and pages from your data but has **no image model**, so it
+doesn't draw artwork — upload your own with `--image`.
 
 ## Where next
 

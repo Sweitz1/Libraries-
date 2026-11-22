@@ -1,0 +1,71 @@
+#!/bin/sh
+# Libra Debian package: configure the service user, data, token, plugins and services.
+set -e
+
+DATA=/var/lib/libra
+ETC=/etc/libra
+
+if [ "$1" = "configure" ]; then
+  # service user
+  if ! id libra >/dev/null 2>&1; then
+    adduser --system --group --home "$DATA" --shell /usr/sbin/nologin --quiet libra || \
+      useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin libra
+  fi
+
+  install -d -o libra -g libra "$DATA" "$DATA/workspace" "$DATA/home" "$DATA/home/plugins"
+  install -d "$ETC"
+
+  # access token (keep an existing one)
+  if [ ! -s "$ETC/token" ]; then
+    python3 -c 'import secrets; print(secrets.token_urlsafe(24))' > "$ETC/token"
+  fi
+  chmod 0640 "$ETC/token"; chown root:libra "$ETC/token" 2>/dev/null || true
+
+  # service settings (a conffile, only written if missing)
+  if [ ! -f "$ETC/libra.env" ]; then
+    cat > "$ETC/libra.env" <<EOF
+# Settings for the Libra services (systemctl restart libra after changes)
+LIBRA_HOME=$DATA/home
+LIBRA_HOST=0.0.0.0
+LIBRA_PORT=8000
+EOF
+  fi
+
+  # training config, switched off until the owner picks sources
+  if [ ! -f "$DATA/libra-auto.json" ]; then
+    runuser -u libra -- env LIBRA_HOME="$DATA/home" /usr/bin/libra auto init "$DATA/libra-auto.json" >/dev/null 2>&1 || true
+    if [ -f "$DATA/libra-auto.json" ]; then
+      python3 - "$DATA/libra-auto.json" <<'PY' || true
+import json, sys
+p = sys.argv[1]; c = json.load(open(p))
+c["enabled"] = False
+c.setdefault("sources", [{"url": "https://example.com/replace-me"}])
+json.dump(c, open(p, "w"), indent=2)
+PY
+    fi
+  fi
+
+  # the plugin suite: copy into the service's plugin folder and record trust
+  cp /usr/share/libra/plugins/*.py "$DATA/home/plugins/" 2>/dev/null || true
+  chown -R libra:libra "$DATA"
+  for f in "$DATA"/home/plugins/*.py; do
+    [ -e "$f" ] || continue
+    runuser -u libra -- env LIBRA_HOME="$DATA/home" /usr/bin/libra trust accept-plugin "$f" >/dev/null 2>&1 || true
+  done
+
+  # enable + start the service (only on a systemd host)
+  if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    systemctl enable --now libra.service >/dev/null 2>&1 || true
+    systemctl enable --now libra-auto.timer libra-agent.timer >/dev/null 2>&1 || true
+    systemctl enable avahi-daemon.service >/dev/null 2>&1 || true
+  fi
+
+  echo "Libra installed. Token: $ETC/token"
+  echo "  App/API on port 8000. Pair a device:  sudo libra-admin pair --token-file $ETC/token --name \"my phone\""
+  echo "  Worldbuilding suite is trusted:        sudo libra-admin skill list"
+  echo "  Lore-wiki website (local, no login):   sudo systemctl enable --now libra-codex && \\"
+  echo "                                         ssh -L 8800:127.0.0.1:8800 <you>@<this-host>  # then http://127.0.0.1:8800/"
+fi
+
+exit 0
