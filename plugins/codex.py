@@ -9,11 +9,14 @@ search it, render a card from it, or fold it into the knowledge base so chat cit
     libra skill run codex_search "BC-304 battlecruiser"
     libra skill run codex_card "USS Daedalus" --out daedalus.svg      # a card, with your image embedded
     libra skill run codex_import ragnarok.json                        # import a worldbook/fic_spec record
+    libra skill run codex_serve                                       # browse/add at http://127.0.0.1:8800/
 
-The AI pulls from it three ways: ``codex_search`` (the agent queries your wiki), ``codex_card`` (render an
-entry), and the knowledge base — ``codex_export`` writes each entry as Markdown for ``libra kb add``, after
-which ``libra ask`` cites your entries like any source. It's all local files you own; nothing leaves the
-machine. Accept once: ``libra trust accept-plugin plugins/codex.py``.
+The AI pulls from it several ways: ``codex_search`` (the agent queries your wiki), ``codex_card`` (render an
+entry), the knowledge base (``codex_export`` writes Markdown for ``libra kb add``, after which ``libra ask``
+cites your entries), and ``codex_serve`` — a local website to browse and add entries, with a
+MediaWiki-compatible ``api.php`` so ``worldbook``/``world_build`` can read your codex like a Fandom wiki.
+It's all local files you own; nothing leaves the machine. Accept once: ``libra trust accept-plugin
+plugins/codex.py``.
 """
 from __future__ import annotations
 
@@ -144,6 +147,30 @@ def codex_import(src: str) -> SkillResult:
                        f"Imported {len(saved)} entr{'y' if len(saved) == 1 else 'ies'} into your codex: "
                        + ", ".join(e["title"] for e in saved[:10]) + ("…" if len(saved) > 10 else ""),
                        {"count": len(saved), "titles": [e["title"] for e in saved]})
+
+
+@skill("codex_serve", "Serve your personal fan wiki as a local website (browse and add entries) with a "
+       "MediaWiki-compatible api.php that worldbook/world_build can read. Runs until you stop it (Ctrl-C).",
+       {"host": "address to bind (default 127.0.0.1, local only)", "port": "port (default 8800)"},
+       risk="write", external=False)
+def codex_serve(host: str = "127.0.0.1", port: int = 8800) -> SkillResult:
+    from libra.codexsite import make_server
+
+    port = int(port)
+    srv = make_server(host, port)
+    url = f"http://{host}:{port}/"
+    warn = "" if host in ("127.0.0.1", "localhost") else "  WARNING: bound to a non-local address — anyone " \
+        "who can reach it can add/read entries (no auth)."
+    print(f"Codex wiki at {url}  (API: {url}api.php). Ctrl-C to stop.{warn}")
+    print(f"Point Libra at it:  libra --allow-private skill run worldbook {url}wiki/<Title>")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    return SkillResult("codex_serve", True, f"Codex site at {url} stopped.", {"url": url})
 
 
 @skill("codex_export", "Export your personal fan wiki as Markdown files, so `libra kb add` can index and "

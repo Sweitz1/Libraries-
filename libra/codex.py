@@ -43,7 +43,7 @@ def _images_dir() -> str:
 
 
 def slugify(title: str) -> str:
-    slug = re.sub(r"[^\w-]+", "-", title.strip().lower()).strip("-")
+    slug = re.sub(r"[_\W]+", "-", title.strip().lower()).strip("-")   # spaces and underscores both separate
     return slug or "entry"
 
 
