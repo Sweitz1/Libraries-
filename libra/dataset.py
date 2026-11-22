@@ -211,6 +211,16 @@ class Dataset:
 
     def add_file(self, path: str, log=print) -> None:
         ext = os.path.splitext(path)[1].lower()
+        from .documents import DOC_EXT
+
+        if ext in DOC_EXT:  # docx, pptx, xlsx, epub, odt/odp/ods, rtf
+            from .documents import DocumentError, extract
+
+            try:
+                self.add_text(extract(path))
+            except DocumentError as exc:
+                log(f"  skipped {os.path.basename(path)}: {exc}")
+            return
         if ext not in TEXT_EXT | HTML_EXT | JSON_EXT | CSV_EXT:
             return
         with open(path, encoding="utf-8", errors="replace") as f:
