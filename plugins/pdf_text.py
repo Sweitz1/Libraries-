@@ -12,6 +12,8 @@ it needs OCR, which this plugin doesn't do, and says so.
 Load it with ``--plugins plugins/`` (or copy to ``~/.libra/plugins/``). Like any plugin, its risk labels
 are believed only after ``libra trust accept-plugin plugins/pdf_text.py``.
 """
+from __future__ import annotations
+
 import os
 import re
 import shutil
