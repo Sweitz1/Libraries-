@@ -4,6 +4,9 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+### Added
+- **`plugins/pdf_text.py`**: a PDF-to-text plugin. It extracts text with the standard library only (inflating compressed content streams with `zlib`), falling back to the system `pdftotext` when installed, so a PDF can be added to the knowledge base (`libra skill run pdf_text report.pdf --out report.txt`). A scanned, image-only PDF has no text to pull out and is reported as needing OCR.
+
 ### Fixed
 - **A skill call that hung, such as a plugin that never returns, hung its job, and with it the agent timer.** Each call in a job now has a limit (`max_call_seconds`, 300 by default). A read-only step that hangs fails, so the usual read-only alternatives can try, and it isn't retried. A change that hangs pauses the job for a person, since it may still complete. Cancelling a job now also works while a call is running. The abandoned call can't be stopped (Python can't kill a thread), so it finishes or dies with the process in the background.
 

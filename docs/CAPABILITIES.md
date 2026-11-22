@@ -37,6 +37,7 @@ are all implemented in this repository.
 
 ## Skills, tools and trust
 
+- **PDF to text** (`plugins/pdf_text.py`): a stdlib-only extractor (zlib for compressed streams) with a system-`pdftotext` fallback, so a PDF's text can go into the knowledge base. Scanned image-only PDFs still need OCR.
 - **12 built-in skills:** `calc`, `scrape`, `crawl`, `links`, `summarize`, `translate`, `detect_language`,
   `romanize`, `remember`, `recall`, `forget`, `time`.
 - **Plugins:** `.py` files using `@skill`. A plugin's own risk labels aren't trusted until you accept the
