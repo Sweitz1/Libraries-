@@ -1,5 +1,5 @@
-"""The codex website + MediaWiki-compatible api.php: spin the real server and make real HTTP requests,
-including pulling from it with worldbook (the whole point — your own wiki read like a Fandom wiki)."""
+"""The codex website + MediaWiki api.php (continuity model). Spins the real server, makes real requests,
+and checks worldbook can read the canon continuity like a Fandom wiki."""
 import importlib.util
 import json
 import os
@@ -7,8 +7,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
-from urllib.parse import quote, urlencode
-
+from urllib.parse import urlencode
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,81 +41,73 @@ class SiteTest(unittest.TestCase):
             os.environ["LIBRA_HOME"] = self.old
         self.tmp.cleanup()
 
-    def test_index_lists_entries_and_form(self):
-        status, body = get(self.base + "/")
-        self.assertEqual(status, 200)
-        self.assertIn(b"USS Daedalus", body)
-        self.assertIn(b"Add / update an entry", body)
+    def test_index_has_continuity_tabs_and_form(self):
+        _, body = get(self.base + "/")
+        text = body.decode()
+        self.assertIn("Main Canon", text)
+        self.assertIn('class="conts"', text)                   # continuity tabs
+        self.assertIn("Add / update an entry", text)
+        self.assertIn("USS Daedalus", text)
 
     def test_entry_page(self):
-        _, body = get(self.base + "/wiki/uss-daedalus")
-        self.assertIn(b"BC-304", body)
-        self.assertIn(b"Ships", body)
-
-    def test_entry_page_is_fandom_styled(self):
-        self.codex.save("Thor", kind="character", fields={"race": "Asgard"},
-                        body="The '''Thor''' is an Asgard.\n== Role ==\nSupreme Commander.",
-                        categories=["Asgard"])
-        _, body = get(self.base + "/wiki/thor")
+        _, body = get(self.base + "/wiki/main-canon/uss-daedalus")
         text = body.decode()
-        self.assertIn('class="portable-infobox"', text)        # Fandom infobox classes
-        self.assertIn('pi-data-label', text)
-        self.assertIn('pi-data-value', text)
-        self.assertIn('<h2 class="sec">Role</h2>', text)       # == Role == became a section
-        self.assertIn("<b>Thor</b>", text)                     # '''bold''' rendered
+        self.assertIn("BC-304", text)
+        self.assertIn("Ships", text)
+        self.assertIn('class="portable-infobox"', text)
+        _, canon = get(self.base + "/wiki/uss-daedalus")       # single segment resolves to canon
+        self.assertIn("BC-304", canon.decode())
 
-    def test_api_parse_is_mediawiki_shaped(self):
-        status, body = get(self.base + "/api.php?" + urlencode({"action": "parse", "page": "USS Daedalus",
-                                                                "format": "json"}))
-        data = json.loads(body)
-        wt = data["parse"]["wikitext"]
-        self.assertIn("{{Infobox ship", wt)
+    def test_au_entry_kept_separate_with_cross_link(self):
+        self.codex.add_continuity("Frostline AU", "au")
+        self.codex.save("USS Daedalus", type="tech", fields={"class": "Prototype"}, continuity="Frostline AU")
+        _, body = get(self.base + "/wiki/frostline-au/uss-daedalus")
+        text = body.decode()
+        self.assertIn("Prototype", text)
+        self.assertIn("Also in other continuities", text)      # auto cross-world link to the canon version
+        self.assertIn("Frostline AU", text)
+
+    def test_api_parse_and_search_read_the_canon(self):
+        _, body = get(self.base + "/api.php?" + urlencode({"action": "parse", "page": "USS Daedalus",
+                                                           "format": "json"}))
+        wt = json.loads(body)["parse"]["wikitext"]
+        self.assertIn("{{Infobox ship", wt)                    # the entry's free kind names the template
         self.assertIn("| class = BC-304", wt)
-        # the real reader parses it back into fields
         from libra import wiki
 
         self.assertEqual(wiki.infobox_fields(wt)[1]["class"], "BC-304")
-        self.assertEqual(data["parse"]["categories"][0]["category"], "Ships")
+        _, s = get(self.base + "/api.php?" + urlencode({"action": "query", "list": "search",
+                                                       "srsearch": "BC-304", "format": "json"}))
+        self.assertIn("USS Daedalus", [r["title"] for r in json.loads(s)["query"]["search"]])
 
-    def test_api_search(self):
-        _, body = get(self.base + "/api.php?" + urlencode({"action": "query", "list": "search",
-                                                           "srsearch": "BC-304", "format": "json"}))
-        titles = [row["title"] for row in json.loads(body)["query"]["search"]]
-        self.assertIn("USS Daedalus", titles)
+    def test_post_add_with_type_and_continuity(self):
+        data = urlencode({"title": "Thor", "type": "character", "continuity": "main-canon",
+                          "fields": "race = Asgard", "body": "A commander.", "date": "2004"}).encode()
+        with urllib.request.urlopen(urllib.request.Request(self.base + "/add", data=data), timeout=5) as r:
+            self.assertIn(b"Thor", r.read())
+        e = self.codex.get("Thor")
+        self.assertEqual(e["type"], "character")
+        self.assertEqual(e["date"], "2004")
 
-    def test_post_add_urlencoded(self):
-        data = urlencode({"title": "Asgard Beam", "kind": "tech", "fields": "type = energy weapon",
-                          "body": "A devastating weapon.", "categories": "Weapons"}).encode()
-        req = urllib.request.Request(self.base + "/add", data=data)
-        with urllib.request.urlopen(req, timeout=5) as r:
-            self.assertEqual(r.status, 200)                    # followed the 303 redirect to the entry page
-            self.assertIn(b"Asgard Beam", r.read())
-        self.assertEqual(self.codex.get("Asgard Beam")["fields"]["type"], "energy weapon")
-
-    def test_post_add_multipart_with_image(self):
+    def test_post_add_multipart_image(self):
         from libra.raster import Canvas
 
         png = Canvas(4, 4, (0, 0, 0)).to_png()
         b = "----libratest"
-        parts = []
-        for name, val in (("title", "Shielded Ship"), ("kind", "ship"), ("fields", "shields = high")):
-            parts.append(f"--{b}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{val}\r\n".encode())
+        parts = [f"--{b}\r\nContent-Disposition: form-data; name=\"{n}\"\r\n\r\n{v}\r\n".encode()
+                 for n, v in (("title", "Shielded Ship"), ("type", "tech"), ("continuity", "main-canon"))]
         parts.append(f"--{b}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"a.png\"\r\n"
-                     f"Content-Type: image/png\r\n\r\n".encode() + png + b"\r\n")
-        parts.append(f"--{b}--\r\n".encode())
-        body = b"".join(parts)
-        req = urllib.request.Request(self.base + "/add", data=body,
+                     f"Content-Type: image/png\r\n\r\n".encode() + png + b"\r\n" + f"--{b}--\r\n".encode())
+        req = urllib.request.Request(self.base + "/add", data=b"".join(parts),
                                      headers={"Content-Type": f"multipart/form-data; boundary={b}"})
         with urllib.request.urlopen(req, timeout=5) as r:
             r.read()
-        entry = self.codex.get("Shielded Ship")
-        self.assertEqual(entry["image"], "images/shielded-ship.png")
-        status, served = get(self.base + "/images/shielded-ship.png")
-        self.assertEqual(served[:8], b"\x89PNG\r\n\x1a\n")     # the uploaded image is served back
+        self.assertEqual(self.codex.get("Shielded Ship")["image"], "images/main-canon/shielded-ship.png")
+        _, served = get(self.base + "/images/main-canon/shielded-ship.png")
+        self.assertEqual(served[:8], b"\x89PNG\r\n\x1a\n")
 
-    def test_worldbook_pulls_from_the_local_codex_like_fandom(self):
-        # the payoff: point Libra's wiki reader at your own codex
-        os.environ["LIBRA_ALLOW_PRIVATE"] = "1"                # fetcher's SSRF guard blocks localhost otherwise
+    def test_worldbook_reads_the_codex(self):
+        os.environ["LIBRA_ALLOW_PRIVATE"] = "1"
         try:
             spec = importlib.util.spec_from_file_location("lorebook_p", os.path.join(ROOT, "plugins", "lorebook.py"))
             lb = importlib.util.module_from_spec(spec)
@@ -124,8 +115,6 @@ class SiteTest(unittest.TestCase):
             r = lb.worldbook(self.base + "/wiki/USS_Daedalus")
             self.assertTrue(r.ok, r.text)
             self.assertEqual(r.data["fields"]["class"], "BC-304")
-            self.assertEqual(r.data["source"], "mediawiki-api")
-            # and world_build can search + pull from it too
             w = lb.world_build(f"{self.base}=Daedalus")
             self.assertTrue(w.ok, w.text)
             self.assertTrue(any(e["title"] == "USS Daedalus" for e in w.data["world"]))

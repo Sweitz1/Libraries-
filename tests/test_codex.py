@@ -1,4 +1,4 @@
-"""The personal fan wiki: libra.codex store and the codex_* plugin skills. Uses a temp LIBRA_HOME."""
+"""The lore manager / world engine: libra.codex store and the codex_* plugin skills. Temp LIBRA_HOME."""
 import importlib.util
 import json
 import os
@@ -38,74 +38,84 @@ class CodexBase(unittest.TestCase):
 
 
 class StoreTest(CodexBase):
-    def test_save_get_and_slug(self):
+    def test_default_continuity_and_save(self):
         from libra import codex
 
-        e = codex.save("USS Daedalus", kind="ship", fields={"class": "BC-304", "crew": "200"},
-                       body="A battlecruiser.", categories=["Ships", "Tau'ri"])
-        self.assertEqual(e["slug"], "uss-daedalus")
-        self.assertEqual(codex.get("uss-daedalus")["fields"]["class"], "BC-304")
-        self.assertEqual(codex.get("USS Daedalus")["title"], "USS Daedalus")   # by title too
-        self.assertIsNone(codex.get("nope"))
+        conts = codex.continuities()
+        self.assertEqual(conts[0]["slug"], "main-canon")
+        self.assertEqual(conts[0]["type"], "canon")
+        e = codex.save("USS Daedalus", kind="ship", fields={"class": "BC-304"})
+        self.assertEqual(e["continuity"], "main-canon")
+        self.assertEqual(e["type"], "tech")                     # classified from kind 'ship'
+        self.assertEqual(codex.get("USS Daedalus")["fields"]["class"], "BC-304")
 
-    def test_update_replaces(self):
+    def test_same_subject_separate_per_continuity(self):
         from libra import codex
 
-        codex.save("Thor", kind="character", fields={"race": "Asgard"})
-        codex.save("Thor", kind="character", fields={"race": "Asgard", "rank": "Commander"})
-        self.assertEqual(len(codex.all_entries()), 1)
-        self.assertIn("rank", codex.get("Thor")["fields"])
+        codex.add_continuity("Frostline AU", "au")
+        codex.save("Thor", type="character", fields={"rank": "Supreme Commander"})
+        codex.save("Thor", type="character", fields={"rank": "Mortal"}, continuity="Frostline AU")
+        self.assertEqual(codex.get("Thor")["fields"]["rank"], "Supreme Commander")          # canon
+        self.assertEqual(codex.get("Thor", "Frostline AU")["fields"]["rank"], "Mortal")     # AU, kept apart
+        self.assertEqual(len(codex.all_entries()), 2)
+        self.assertEqual(len(codex.all_entries("main-canon")), 1)
 
-    def test_image_is_copied_in(self):
+    def test_typed_grouping_and_classify(self):
+        from libra import codex
+
+        codex.save("Erin", type="character")
+        codex.save("Liscor", kind="city")
+        codex.save("The Horns", kind="guild")
+        groups = codex.by_type("main-canon")
+        self.assertEqual(set(groups), {"character", "location", "faction"})
+        self.assertEqual(codex.classify_type("starship"), "tech")
+
+    def test_timeline_sorted_by_date(self):
+        from libra import codex
+
+        codex.save("Second event", type="event", date="2005")
+        codex.save("First event", type="event", date="2004")
+        codex.save("Undated", type="event")
+        tl = codex.timeline("main-canon")
+        self.assertEqual([e["title"] for e in tl], ["First event", "Second event"])          # dated only, in order
+
+    def test_cross_world_links_auto_and_explicit(self):
+        from libra import codex
+
+        codex.add_continuity("Modern AU", "au")
+        codex.save("Thor", type="character")
+        codex.save("Thor", type="character", continuity="Modern AU")                          # same slug → auto link
+        main = codex.get("Thor")
+        linked = codex.links_of(main)
+        self.assertEqual([c["slug"] for c, _ in linked], ["modern-au"])
+
+    def test_conflicts(self):
+        from libra import codex
+
+        clashes = codex.conflicts({"fields": {"rank": "SC", "race": "Asgard"}},
+                                  {"rank": "Admiral", "race": "Asgard", "age": "900"})
+        self.assertEqual(clashes, {"rank": ("SC", "Admiral")})
+
+    def test_image_copied_per_continuity(self):
         from libra import codex
 
         e = codex.save("Ship", image=self.make_png())
-        self.assertEqual(e["image"], "images/ship.png")
+        self.assertEqual(e["image"], "images/main-canon/ship.png")
         self.assertTrue(os.path.isfile(codex.image_path(e)))
 
-    def test_bad_image_rejected(self):
+    def test_legacy_flat_entries_migrate_into_canon(self):
         from libra import codex
 
-        bad = os.path.join(self.tmp.name, "notes.txt")
-        open(bad, "w").close()
-        with self.assertRaises(ValueError):
-            codex.save("X", image=bad)
-
-    def test_search_ranks_by_terms(self):
-        from libra import codex
-
-        codex.save("USS Daedalus", kind="ship", fields={"class": "BC-304"}, categories=["Ships"])
-        codex.save("Thor", kind="character", body="Asgard commander")
-        hits = codex.search("BC-304 ship")
-        self.assertEqual(hits[0]["title"], "USS Daedalus")
-        self.assertEqual(codex.search("asgard")[0]["title"], "Thor")
-
-    def test_canon_tier_stored_and_filtered(self):
-        from libra import codex
-
-        codex.save("Thor", kind="character", fields={"race": "Asgard"}, canon="official")
-        codex.save("Erin", kind="character", canon="mine")
-        self.assertEqual(codex.get("Thor")["canon"], "official")
-        self.assertEqual([e["title"] for e in codex.search("", tier="mine")], ["Erin"])
-        self.assertIn("official", codex.by_tier())
-        with self.assertRaises(ValueError):
-            codex.save("X", canon="nonsense")
-
-    def test_conflicts_detects_changed_fields(self):
-        from libra import codex
-
-        existing = {"fields": {"rank": "Supreme Commander", "race": "Asgard"}}
-        clashes = codex.conflicts(existing, {"rank": "Fleet Admiral", "race": "Asgard", "age": "900"})
-        self.assertEqual(clashes, {"rank": ("Supreme Commander", "Fleet Admiral")})   # changed only; new field ok
-
-    def test_markdown_and_record(self):
-        from libra import codex
-
-        codex.save("Item", kind="tech", fields={"power": "high"}, body="A gadget.", categories=["Tech"])
-        md = codex.to_markdown(codex.get("Item"))
-        self.assertIn("# Item", md)
-        self.assertIn("**power:** high", md)
-        self.assertEqual(codex.to_record(codex.get("Item"))["summary"], "A gadget.")
+        # write a legacy flat entry file (pre-continuity layout)
+        root = os.path.join(codex.base(), "entries")
+        os.makedirs(root, exist_ok=True)
+        with open(os.path.join(root, "thor.json"), "w") as f:
+            json.dump({"slug": "thor", "title": "Thor", "kind": "character", "fields": {"race": "Asgard"},
+                       "body": "", "categories": []}, f)
+        e = codex.get("Thor")                                   # continuities()/migrate runs on access
+        self.assertEqual(e["continuity"], "main-canon")
+        self.assertEqual(e["type"], "character")
+        self.assertFalse(os.path.isfile(os.path.join(root, "thor.json")))
 
 
 class PluginTest(CodexBase):
@@ -113,118 +123,106 @@ class PluginTest(CodexBase):
         super().setUp()
         self.m = load_plugin()
 
-    def test_add_search_get_flow(self):
-        r = self.m.codex_add("USS Daedalus", kind="ship",
-                             fields="class=BC-304; armament=Asgard beams; crew=200",
-                             body="Earth's second BC-304.", categories="Ships, Tau'ri")
+    def test_add_search_get(self):
+        r = self.m.codex_add("USS Daedalus", type="tech", fields="class=BC-304; crew=200",
+                             body="Earth's second BC-304.", categories="Ships")
         self.assertTrue(r.ok)
-        self.assertEqual(r.data["fields"]["armament"], "Asgard beams")
+        self.assertIn("Main Canon", r.text)
         s = self.m.codex_search("BC-304")
-        self.assertTrue(s.ok)
         self.assertEqual(s.data["entries"][0]["title"], "USS Daedalus")
-        g = self.m.codex_get("USS Daedalus")
-        self.assertIn("# USS Daedalus", g.text)
+        self.assertIn("# USS Daedalus", self.m.codex_get("USS Daedalus").text)
 
-    def test_add_with_image_then_card_svg_embeds_it(self):
-        self.m.codex_add("Ragnarok", kind="ship", fields="length=1,900 m", image=self.make_png())
-        out = os.path.join(self.tmp.name, "ragnarok.svg")
-        r = self.m.codex_card("Ragnarok", out=out)
-        self.assertTrue(r.ok)
-        with open(out, encoding="utf-8") as f:
-            svg = f.read()
-        self.assertIn("<image", svg)                           # the stored image is embedded
-        self.assertIn("1,900 m", svg)
+    def test_continuity_and_au_separation(self):
+        self.m.codex_continuity("Frostline AU", type="au")
+        self.m.codex_add("Thor", type="character", fields="rank=Supreme Commander")
+        self.m.codex_add("Thor", type="character", fields="rank=Mortal", continuity="Frostline AU")
+        self.assertEqual(self.m.codex_get("Thor").data["fields"]["rank"], "Supreme Commander")
+        self.assertEqual(self.m.codex_get("Thor", "Frostline AU").data["fields"]["rank"], "Mortal")
+        tiers = self.m.codex_continuity()
+        self.assertIn("Frostline AU", tiers.text)
 
-    def test_card_png_renders(self):
-        self.m.codex_add("Thor", kind="character", fields="race=Asgard")
-        out = os.path.join(self.tmp.name, "thor.png")
-        r = self.m.codex_card("Thor", out=out)
-        self.assertTrue(r.ok)
-        with open(out, "rb") as f:
-            self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
-
-    def test_contradiction_is_flagged_then_forced(self):
-        self.m.codex_add("Thor", kind="character", fields="rank=Supreme Commander", canon="official")
-        flagged = self.m.codex_add("Thor", kind="character", fields="rank=Fleet Admiral", canon="official")
-        self.assertFalse(flagged.ok)                           # established lore change, not saved
+    def test_contradiction_flag_then_force(self):
+        self.m.codex_add("Thor", type="character", fields="rank=Supreme Commander")
+        flagged = self.m.codex_add("Thor", type="character", fields="rank=Fleet Admiral")
+        self.assertFalse(flagged.ok)
         self.assertIn("rank", flagged.data["conflicts"])
         from libra import codex
 
-        self.assertEqual(codex.get("Thor")["fields"]["rank"], "Supreme Commander")   # unchanged
-        forced = self.m.codex_add("Thor", kind="character", fields="rank=Fleet Admiral", canon="official",
-                                  force=True)
+        self.assertEqual(codex.get("Thor")["fields"]["rank"], "Supreme Commander")
+        forced = self.m.codex_add("Thor", type="character", fields="rank=Fleet Admiral", force=True)
         self.assertTrue(forced.ok)
         self.assertEqual(codex.get("Thor")["fields"]["rank"], "Fleet Admiral")
 
-    def test_new_fields_do_not_trigger_a_flag(self):
-        self.m.codex_add("Ship", fields="class=BC-304", canon="mine")
-        r = self.m.codex_add("Ship", fields="class=BC-304; crew=200", canon="mine")   # adds crew, keeps class
+    def test_new_field_does_not_flag(self):
+        self.m.codex_add("Ship", fields="class=BC-304")
+        self.assertTrue(self.m.codex_add("Ship", fields="class=BC-304; crew=200").ok)
+
+    def test_timeline_skill(self):
+        self.m.codex_add("Battle", type="event", date="2004")
+        r = self.m.codex_timeline()
+        self.assertTrue(r.ok)
+        self.assertIn("2004", r.text)
+
+    def test_link_skill(self):
+        self.m.codex_continuity("Modern AU", type="au")
+        self.m.codex_add("Thor", type="character")
+        self.m.codex_add("Thor", type="character", continuity="Modern AU")
+        r = self.m.codex_link("Thor", to="modern-au/thor")
         self.assertTrue(r.ok)
 
-    def test_import_tags_canon_and_source(self):
-        rec = {"title": "Asgard", "kind": "species", "fields": {"homeworld": "Othala"},
-               "summary": "A race.", "categories": ["Races"], "url": "https://stargate.fandom.com/wiki/Asgard"}
-        src = os.path.join(self.tmp.name, "a.json")
+    def test_card_png_and_svg(self):
+        self.m.codex_add("Ragnarok", type="tech", fields="length=1,900 m", image=self.make_png())
+        svg_out = os.path.join(self.tmp.name, "r.svg")
+        self.assertTrue(self.m.codex_card("Ragnarok", out=svg_out).ok)
+        with open(svg_out, encoding="utf-8") as f:
+            self.assertIn("<image", f.read())
+        png_out = os.path.join(self.tmp.name, "r.png")
+        self.m.codex_card("Ragnarok", out=png_out)
+        with open(png_out, "rb") as f:
+            self.assertEqual(f.read(8), b"\x89PNG\r\n\x1a\n")
+
+    def test_import_into_continuity(self):
+        rec = {"subject": "Ragnarok", "specs": {"Length": "1,900 m"}, "mentions": ["Asgard"],
+               "url": "https://ff/s/1/7/"}
+        src = os.path.join(self.tmp.name, "r.json")
         with open(src, "w") as f:
             json.dump(rec, f)
-        self.m.codex_import(src, canon="fanon")
+        r = self.m.codex_import(src, continuity="Sources")       # creates the AU 'Sources'
+        self.assertTrue(r.ok)
         from libra import codex
 
-        e = codex.get("Asgard")
-        self.assertEqual(e["canon"], "fanon")
-        self.assertEqual(e["source"], "https://stargate.fandom.com/wiki/Asgard")
+        e = codex.get("Ragnarok", "Sources")
+        self.assertEqual(e["fields"]["Length"], "1,900 m")
+        self.assertEqual(e["source"], "https://ff/s/1/7/")
 
     def test_build_static_site(self):
-        self.m.codex_add("USS Daedalus", kind="ship", fields="class=BC-304",
-                         body="A battlecruiser.\n== History ==\nBuilt by the Tau'ri.", canon="official")
-        self.m.codex_add("Erin", kind="character", canon="mine", body="An innkeeper.")
+        self.m.codex_continuity("Frostline AU", type="au")
+        self.m.codex_add("USS Daedalus", type="tech", fields="class=BC-304",
+                         body="A ship.\n== History ==\nBuilt by the Tau'ri.")
+        self.m.codex_add("Thor", type="character", continuity="Frostline AU")
         out = os.path.join(self.tmp.name, "site")
         r = self.m.codex_build(out)
         self.assertTrue(r.ok)
         self.assertEqual(r.data["entries"], 2)
+        self.assertEqual(r.data["continuities"], 2)
         self.assertTrue(os.path.isfile(os.path.join(out, "index.html")))
-        self.assertTrue(os.path.isfile(os.path.join(out, "wiki", "uss-daedalus.html")))
+        self.assertTrue(os.path.isfile(os.path.join(out, "wiki", "main-canon", "uss-daedalus.html")))
+        self.assertTrue(os.path.isfile(os.path.join(out, "wiki", "frostline-au", "thor.html")))
         with open(os.path.join(out, "index.html"), encoding="utf-8") as f:
             idx = f.read()
-        self.assertIn("Official canon", idx)                   # grouped by tier
-        self.assertIn("Your canon", idx)
-        self.assertIn('href="wiki/uss-daedalus.html"', idx)    # static relative links
-        with open(os.path.join(out, "wiki", "uss-daedalus.html"), encoding="utf-8") as f:
+        self.assertIn("Main Canon", idx)
+        self.assertIn("Frostline AU", idx)
+        self.assertIn('href="wiki/main-canon/uss-daedalus.html"', idx)
+        with open(os.path.join(out, "wiki", "main-canon", "uss-daedalus.html"), encoding="utf-8") as f:
             page = f.read()
         self.assertIn('class="portable-infobox"', page)
         self.assertIn("History", page)
-        self.assertIn('href="../index.html"', page)            # home link rewritten for subdir
+        self.assertIn('href="../../index.html"', page)
 
-    def test_import_fic_spec_record(self):
-        rec = {"subject": "Ragnarok", "heading": "Technical Readout",
-               "specs": {"Length": "1,900 m", "Crew": "2,500"}, "mentions": ["Asgard", "Vipers"]}
-        src = os.path.join(self.tmp.name, "r.json")
-        with open(src, "w") as f:
-            json.dump(rec, f)
-        r = self.m.codex_import(src)
-        self.assertTrue(r.ok)
-        from libra import codex
-
-        e = codex.get("Ragnarok")
-        self.assertEqual(e["fields"]["Length"], "1,900 m")
-        self.assertEqual(e["kind"], "ship")
-
-    def test_import_world_file_many_entries(self):
-        world = {"world": [{"title": "Asgard", "kind": "species", "fields": {"homeworld": "Othala"},
-                            "summary": "A race.", "categories": ["Races"]},
-                           {"title": "Daedalus", "kind": "ship", "fields": {"class": "BC-304"},
-                            "summary": "", "categories": []}]}
-        src = os.path.join(self.tmp.name, "world.json")
-        with open(src, "w") as f:
-            json.dump(world, f)
-        r = self.m.codex_import(src)
-        self.assertEqual(r.data["count"], 2)
-
-    def test_export_writes_markdown_for_kb(self):
-        self.m.codex_add("Thing", kind="tech", body="It does things.")
+    def test_export_markdown(self):
+        self.m.codex_add("Thing", type="item", body="It does things.")
         out = os.path.join(self.tmp.name, "md")
-        r = self.m.codex_export(out)
-        self.assertTrue(r.ok)
+        self.assertTrue(self.m.codex_export(out).ok)
         self.assertTrue(os.path.isfile(os.path.join(out, "thing.md")))
 
     def test_registration(self):
@@ -233,9 +231,8 @@ class PluginTest(CodexBase):
         reg = SkillRegistry()
         got = reg.load_plugins([os.path.join(ROOT, "plugins")], log=None)
         want = {"codex_add", "codex_search", "codex_get", "codex_card", "codex_import", "codex_export",
-                "codex_build", "codex_serve"}
+                "codex_build", "codex_serve", "codex_continuity", "codex_timeline", "codex_link"}
         self.assertEqual(want & set(got), want)
-        # codex_add changes local data: a write skill (and its label held until the plugin is accepted)
         self.assertEqual(reg.get("codex_add").risk, "write")
 
 

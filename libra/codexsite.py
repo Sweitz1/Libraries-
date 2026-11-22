@@ -68,8 +68,12 @@ button{{font:inherit;background:var(--accent);color:var(--accentink);border:0;bo
 padding:10px 20px;font-weight:600}}
 .muted{{color:var(--muted)}}
 .badge{{display:inline-block;font-size:12px;font-weight:700;padding:2px 9px;border-radius:12px;vertical-align:middle}}
-.b-official{{background:#1f5fbf;color:#fff}}.b-fanon{{background:#8a5a1f;color:#fff}}.b-mine{{background:#2e7d4f;color:#fff}}
+.b-canon{{background:#1f5fbf;color:#fff}}.b-au{{background:#7a3fb0;color:#fff}}
 .tiergroup{{margin:22px 0 6px;font-weight:800;font-size:15px;display:flex;align-items:center;gap:8px}}
+.conts{{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 16px}}
+.conts a{{padding:6px 14px;border:1px solid var(--line);border-radius:18px;background:var(--panel);font-weight:600}}
+.conts a.on{{background:var(--accent);color:var(--accentink);border-color:var(--accent)}}
+.links{{clear:both;margin-top:18px;font-size:14px}}.links b{{color:var(--ink)}}
 @media(max-width:640px){{.portable-infobox{{float:none;width:auto;margin:0 0 16px}}.wrap{{padding:16px}}}}
 </style></head><body><header class=site><a href="/">&#128214; Codex</a>
 <form class=s method=get action="/"><input name=q placeholder="Search the codex…"></form></header>
@@ -123,11 +127,13 @@ def _infobox_html(entry: dict) -> str:
         cap = html.escape(entry.get("kind") or "")
         parts.append(f'<figure class="pi-image"><img src="/{html.escape(entry["image"])}" alt="">'
                      + (f'<figcaption class="pi-image-caption">{cap}</figcaption>' if cap else "") + "</figure>")
-    tier = codex.CANON_TIERS.get(entry.get("canon", codex.DEFAULT_TIER), "")
-    overview = []
-    if entry.get("kind"):
-        overview.append(("Type", html.escape(entry["kind"])))
-    overview.append(("Canon", html.escape(tier)))
+    cont = codex.continuity(entry.get("continuity", codex.CANON_SLUG))
+    overview = [("Type", html.escape(entry.get("kind") or codex.TYPE_LABELS.get(entry.get("type", "article"),
+                                                                                "Article")[:-1]))]
+    if cont:
+        overview.append(("Continuity", html.escape(cont["name"])))
+    if entry.get("date"):
+        overview.append(("Date", html.escape(entry["date"])))
     if entry.get("source"):
         src = html.escape(entry["source"])
         val = f'<a href="{src}" rel="nofollow">{src}</a>' if re.match(r"https?://", entry["source"]) else src
@@ -175,65 +181,94 @@ def _body_html(body: str) -> str:
     return "".join(out)
 
 
-def _render_entry(entry: dict) -> str:
+def _type_label(entry: dict) -> str:
+    return entry.get("kind") or codex.TYPE_LABELS.get(entry.get("type", "article"), "Article")[:-1]
+
+
+def _cont_badge(cont: dict) -> str:
+    return f'<span class="badge b-{cont["type"]}">{html.escape(cont["name"])}</span>' if cont else ""
+
+
+def _render_entry(entry: dict, href=None) -> str:
+    href = href or (lambda c, s: f"/wiki/{c}/{s}")
+    cont = codex.continuity(entry.get("continuity", codex.CANON_SLUG))
     infobox = _infobox_html(entry)
     lead = f'<div class="lead">{_body_html(entry["body"])}</div>' if entry.get("body") else ""
-    tier = entry.get("canon", codex.DEFAULT_TIER)
-    badge = f'<span class="badge b-{tier}">{html.escape(codex.CANON_TIERS.get(tier, tier))}</span>'
-    tagline = f'<div class="tagline">{html.escape(entry.get("kind") or "entry")} {badge}</div>'
+    tagline = f'<div class="tagline">{html.escape(_type_label(entry))} {_cont_badge(cont)}</div>'
     cats = ('<div class="catbar"><b>Categories:</b> '
-            + " &middot; ".join(f'<a href="/?q={html.escape(c)}">{html.escape(c)}</a>' for c in entry["categories"])
+            + " &middot; ".join(html.escape(c) for c in entry["categories"])
             + "</div>" if entry.get("categories") else "")
-    empty = "" if (lead or infobox) else '<p class="muted">This entry has no description or fields yet.</p>'
+    cross = codex.links_of(entry)
+    links = ('<div class="links"><b>Also in other continuities:</b> '
+             + ", ".join(f'<a href="{href(c["slug"], e["slug"])}">{html.escape(e["title"])} '
+                         f'({html.escape(c["name"])})</a>' for c, e in cross) + "</div>") if cross else ""
+    empty = "" if (lead or entry.get("fields")) else '<p class="muted">This entry has no description yet.</p>'
     return (f'<article class="article"><h1 class="page">{html.escape(entry.get("title", ""))}</h1>{tagline}'
-            f'{infobox}{lead}{empty}{cats}</article>')
+            f'{infobox}{lead}{empty}{links}{cats}</article>')
 
 
 def _card_link(e: dict, href: str) -> str:
-    tier = e.get("canon", codex.DEFAULT_TIER)
+    cont = codex.continuity(e.get("continuity", codex.CANON_SLUG))
     return (f'<a class="card" href="{href}"><div class="t">{html.escape(e["title"])}</div>'
-            f'<div class="k">{html.escape(e.get("kind") or "entry")} '
-            f'<span class="badge b-{tier}">{html.escape(codex.CANON_TIERS.get(tier, tier))}</span></div></a>')
+            f'<div class="k">{html.escape(_type_label(e))} {_cont_badge(cont)}</div></a>')
 
 
-def _grouped_listing(entries: list, href) -> str:
-    """Entries grouped by canon tier (official, fanon, mine)."""
-    if not entries:
-        return '<p class="muted">No entries yet — add one below.</p>'
-    by: dict = {}
-    for e in entries:
-        by.setdefault(e.get("canon", codex.DEFAULT_TIER), []).append(e)
+def _typed_listing(cont_slug: str, href) -> str:
+    """A continuity's entries grouped by type (Characters, Locations, Factions, …)."""
+    groups = codex.by_type(cont_slug)
+    if not groups:
+        return '<p class="muted">No entries in this continuity yet — add one below.</p>'
     out = []
-    for tier in codex.CANON_TIERS:
-        if by.get(tier):
-            out.append(f'<div class="tiergroup"><span class="badge b-{tier}">'
-                       f'{html.escape(codex.CANON_TIERS[tier])}</span></div>')
-            out.append('<ul class="entries">' + "".join(_card_link(e, href(e)) for e in by[tier]) + "</ul>")
+    for etype, items in groups.items():
+        out.append(f'<div class="tiergroup">{html.escape(codex.TYPE_LABELS.get(etype, etype))} '
+                   f'<span class="muted">({len(items)})</span></div>')
+        out.append('<ul class="entries">' + "".join(_card_link(e, href(e)) for e in items) + "</ul>")
     return "".join(out)
 
 
+def _cont_tabs(active: str, href_for) -> str:
+    tabs = []
+    for c in codex.continuities():
+        n = len(codex.all_entries(c["slug"]))
+        on = " on" if c["slug"] == active else ""
+        tabs.append(f'<a class="{on.strip()}" href="{href_for(c)}">{html.escape(c["name"])} '
+                    f'<span class="muted">{n}</span></a>')
+    return '<div class="conts">' + "".join(tabs) + "</div>"
+
+
 def _add_form() -> str:
-    opts = "".join(f'<option value="{t}"{" selected" if t == codex.DEFAULT_TIER else ""}>'
-                   f'{html.escape(codex.CANON_TIERS[t])}</option>' for t in codex.CANON_TIERS)
+    conts = "".join(f'<option value="{c["slug"]}">{html.escape(c["name"])}</option>'
+                    for c in codex.continuities())
+    types = "".join(f'<option value="{t}">{html.escape(codex.TYPE_LABELS[t])}</option>'
+                    for t in codex.ENTRY_TYPES)
     return ('<div class="box"><h2>Add / update an entry</h2>'
             '<form method=post action="/add" enctype="multipart/form-data">'
             '<label>Title</label><input name=title required>'
-            '<label>Kind</label><input name=kind placeholder="character / item / tech / ship / place">'
-            f'<label>Canon tier</label><select name=canon>{opts}</select>'
-            '<label>Source (where this lore came from)</label><input name=source placeholder="e.g. a wiki URL">'
+            f'<label>Continuity</label><select name=continuity>{conts}</select>'
+            f'<label>Type</label><select name=type>{types}</select>'
+            '<label>Kind (free label, optional)</label><input name=kind placeholder="e.g. ship, planet, villain">'
             '<label>Fields (one per line, key = value) — these become the infobox table</label>'
             '<textarea name=fields rows=5 placeholder="class = BC-304&#10;crew = 200"></textarea>'
             '<label>Description (use == Heading == for sections)</label><textarea name=body rows=5></textarea>'
+            '<label>Date (optional — places it on the timeline)</label><input name=date placeholder="e.g. 2005">'
             '<label>Categories (comma-separated)</label><input name=categories>'
+            '<label>Source (where this lore came from)</label><input name=source>'
             '<label>Image</label><input type=file name=image accept="image/*">'
             '<button type=submit>Save entry</button></form></div>')
 
 
-def _render_index(entries: list, query: str = "") -> str:
-    listing = _grouped_listing(entries, lambda e: "/wiki/" + html.escape(e["slug"]))
-    heading = f"Search: {html.escape(query)}" if query else "Your codex"
-    count = f'<span class="muted"> &mdash; {len(entries)} entr{"y" if len(entries) == 1 else "ies"}</span>'
-    return (f'<h1 class="page">{html.escape(heading)}{count}</h1><div style="height:12px"></div>'
+def _render_index(active: str, query: str = "") -> str:
+    if query:
+        hits = codex.search(query, 100)
+        listing = ('<ul class="entries">' + "".join(_card_link(e, f"/wiki/{e['continuity']}/{e['slug']}")
+                                                     for e in hits) + "</ul>"
+                   if hits else '<p class="muted">No matches.</p>')
+        return f'<h1 class="page">Search: {html.escape(query)} <span class="muted">— {len(hits)}</span></h1>{listing}'
+    cont = codex.continuity(active) or codex.continuities()[0]
+    tabs = _cont_tabs(cont["slug"], lambda c: "/?c=" + c["slug"])
+    desc = f'<p class="muted">{html.escape(cont["description"])}</p>' if cont.get("description") else ""
+    listing = _typed_listing(cont["slug"], lambda e: f"/wiki/{e['continuity']}/{e['slug']}")
+    return (f'<h1 class="page">{html.escape(cont["name"])} {_cont_badge(cont)}</h1>{desc}{tabs}'
             f'{listing}{_add_form()}')
 
 
@@ -263,17 +298,20 @@ class _Handler(BaseHTTPRequestHandler):
             return self._api(qs)
         if path == "/":
             q = (qs.get("q") or [""])[0]
-            entries = codex.search(q, 100) if q else codex.all_entries()
-            return self._page(_render_index(entries, q))
+            active = codex.resolve_continuity((qs.get("c") or [""])[0])
+            return self._page(_render_index(active, q))
         if path.startswith("/wiki/"):
-            entry = codex.get(unquote(path[len("/wiki/"):]))
+            rest = [p for p in unquote(path[len("/wiki/"):]).split("/") if p]
+            cont, slug = (rest[0], rest[1]) if len(rest) >= 2 else (codex.CANON_SLUG, rest[0] if rest else "")
+            entry = codex.get(slug, cont)
             if entry is None:
                 return self._page("<p>No such entry. <a href=/>Back</a></p>", "Not found")
             return self._page(_render_entry(entry), entry.get("title", "Entry"))
         if path.startswith("/images/"):
-            name = os.path.basename(unquote(path))             # basename blocks path traversal
-            fpath = os.path.join(codex.base(), "images", name)
-            if os.path.isfile(fpath):
+            rel = unquote(path[len("/images/"):])
+            root = os.path.realpath(os.path.join(codex.base(), "images"))
+            fpath = os.path.realpath(os.path.join(root, rel))
+            if fpath.startswith(root + os.sep) and os.path.isfile(fpath):   # guard path traversal
                 import mimetypes
                 with open(fpath, "rb") as f:
                     return self._send(f.read(), 200, mimetypes.guess_type(fpath)[0] or "application/octet-stream")
@@ -282,14 +320,15 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _api(self, qs):
         action = (qs.get("action") or [""])[0]
+        cont = codex.resolve_continuity((qs.get("continuity") or [""])[0])   # reads the canon by default
         if action == "parse":
-            entry = codex.get((qs.get("page") or [""])[0])
+            entry = codex.get((qs.get("page") or [""])[0], cont)
             if entry is None:
                 return self._json({"error": {"code": "missingtitle", "info": "page not found"}})
             return self._json({"parse": parse_payload(entry)})
         if action == "query" and (qs.get("list") or [""])[0] == "search":
             limit = int((qs.get("srlimit") or ["10"])[0])
-            hits = codex.search((qs.get("srsearch") or [""])[0], limit)
+            hits = codex.search((qs.get("srsearch") or [""])[0], limit, continuity=cont)
             return self._json({"query": {"search": [{"title": e["title"]} for e in hits]}})
         return self._json({"error": {"code": "unknown_action"}})
 
@@ -327,16 +366,15 @@ class _Handler(BaseHTTPRequestHandler):
                 with open(tmp, "wb") as f:
                     f.write(data)
                 image_path = tmp
-        tier = (fields.get("canon") or codex.DEFAULT_TIER).strip().lower()
-        if tier not in codex.CANON_TIERS:
-            tier = codex.DEFAULT_TIER
-        entry = codex.save(title, kind=fields.get("kind", "").strip(), fields=field_map,
-                           body=fields.get("body", "").strip(), categories=cats, image=image_path,
-                           canon=tier, source=fields.get("source", "").strip())
+        cont = codex.resolve_continuity(fields.get("continuity", ""))
+        entry = codex.save(title, kind=fields.get("kind", "").strip(), type=fields.get("type", "").strip(),
+                           fields=field_map, body=fields.get("body", "").strip(), categories=cats,
+                           image=image_path, continuity=cont, date=fields.get("date", "").strip(),
+                           source=fields.get("source", "").strip())
         if image_path and os.path.isfile(image_path):
             os.remove(image_path)
         self.send_response(303)                                # redirect to the new entry
-        self.send_header("Location", "/wiki/" + entry["slug"])
+        self.send_header("Location", f"/wiki/{entry['continuity']}/{entry['slug']}")
         self.end_headers()
 
 
@@ -345,44 +383,51 @@ def make_server(host: str = "127.0.0.1", port: int = 8800) -> ThreadingHTTPServe
 
 
 # -------------------------------------------------- static site generation
-def _static_shell(title: str, inner: str) -> str:
-    """The page shell for the static build: home points at index.html, no live search/forms."""
+def _static_shell(title: str, inner: str, home: str = "index.html") -> str:
+    """The page shell for the static build: home link given, no live search/forms."""
     page = _PAGE.replace('<a href="/">&#128214; Codex</a>\n'
                          '<form class=s method=get action="/"><input name=q placeholder="Search the codex…"></form>',
-                         '<a href="index.html">&#128214; Codex</a>')
+                         f'<a href="{home}">&#128214; Codex</a>')
     return page.format(title=html.escape(title), body=inner)
 
 
 def build_site(out_dir: str) -> dict:
-    """Generate the whole codex as a static, text-only wiki site (index + a page per entry + images).
+    """Generate the whole world as a static, text-only wiki site: an index grouped by continuity and type,
+    a page per entry (``wiki/<continuity>/<slug>.html``), images, and working cross-world links.
 
-    The lorebook is the single source of truth; this renders it, so the two never drift. Returns a small
-    report. Hostable on any static host; no server, no image model, no JavaScript."""
+    The lorebook is the single source of truth; this renders it, so the two never drift. Hostable on any
+    static host — no server, no image model, no JavaScript."""
     import shutil
 
+    conts = codex.continuities()
     entries = codex.all_entries()
-    pages_dir = os.path.join(out_dir, "wiki")
-    os.makedirs(pages_dir, exist_ok=True)
-    # images (referenced by the entry pages as ../images/...)
-    src_images = os.path.join(codex.base(), "images")
-    if os.path.isdir(src_images):
-        dst_images = os.path.join(out_dir, "images")
-        os.makedirs(dst_images, exist_ok=True)
-        for name in os.listdir(src_images):
-            shutil.copyfile(os.path.join(src_images, name), os.path.join(dst_images, name))
+    if os.path.isdir(os.path.join(codex.base(), "images")):     # copy images, keeping the continuity subdirs
+        shutil.copytree(os.path.join(codex.base(), "images"), os.path.join(out_dir, "images"),
+                        dirs_exist_ok=True)
 
-    for entry in entries:                                        # one article page per entry
-        article = _render_entry(entry)
-        # rewrite server paths to static, relative ones (pages live in wiki/)
-        article = article.replace('src="/images/', 'src="../images/')
-        article = re.sub(r'href="/\?q=[^"]*"', 'href="../index.html"', article)   # category links → home
-        html_doc = _static_shell(entry.get("title", "Entry"), article).replace('href="index.html"', 'href="../index.html"')
-        with open(os.path.join(pages_dir, entry["slug"] + ".html"), "w", encoding="utf-8") as f:
-            f.write(html_doc)
+    for entry in entries:                                        # one article page per entry, two levels deep
+        page_dir = os.path.join(out_dir, "wiki", entry["continuity"])
+        os.makedirs(page_dir, exist_ok=True)
+        article = _render_entry(entry, href=lambda c, s: f"../{c}/{s}.html")
+        article = article.replace('src="/images/', 'src="../../images/')
+        doc = _static_shell(entry.get("title", "Entry"), article, home="../../index.html")
+        with open(os.path.join(page_dir, entry["slug"] + ".html"), "w", encoding="utf-8") as f:
+            f.write(doc)
 
-    listing = _grouped_listing(entries, lambda e: "wiki/" + e["slug"] + ".html")
-    index = (f'<h1 class="page">Codex<span class="muted"> &mdash; {len(entries)} '
-             f'entr{"y" if len(entries) == 1 else "ies"}</span></h1>{listing}')
+    def href(e):
+        return f"wiki/{e['continuity']}/{e['slug']}.html"
+
+    sections = [f'<h1 class="page">Your world <span class="muted">&mdash; {len(entries)} '
+                f'entr{"y" if len(entries) == 1 else "ies"} across {len(conts)} '
+                f'continuit{"y" if len(conts) == 1 else "ies"}</span></h1>']
+    for c in conts:
+        n = len(codex.all_entries(c["slug"]))
+        sections.append(f'<h2 class="sec">{html.escape(c["name"])} {_cont_badge(c)} '
+                        f'<span class="muted">({n})</span></h2>')
+        if c.get("description"):
+            sections.append(f'<p class="muted">{html.escape(c["description"])}</p>')
+        sections.append(_typed_listing(c["slug"], href))
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
-        f.write(_static_shell("Codex", index))
-    return {"dir": out_dir, "entries": len(entries), "index": os.path.join(out_dir, "index.html")}
+        f.write(_static_shell("Codex", "".join(sections)))
+    return {"dir": out_dir, "entries": len(entries), "continuities": len(conts),
+            "index": os.path.join(out_dir, "index.html")}

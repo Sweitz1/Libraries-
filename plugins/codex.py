@@ -42,80 +42,91 @@ def _parse_list(text: str) -> list:
     return [t.strip() for t in re.split(r"[,;\n]", text) if t.strip()]
 
 
-@skill("codex_add", "Add or update an entry in your personal fan wiki (character, item, tech, ship, place) "
-       "with fields, an optional image, and a canon tier. Flags contradictions before changing established "
-       "lore (re-run with force=true to apply).",
-       {"title": "the entry title, e.g. USS Daedalus", "kind": "character/item/tech/ship/place/…",
-        "fields": "infobox fields, 'key=value; key=value'", "body": "a description paragraph",
+@skill("codex_add", "Add or update an entry (character, location, faction, item, tech, species, event) in a "
+       "continuity of your world. Flags contradictions before changing established lore (re-run with "
+       "force=true to apply).",
+       {"title": "the entry title, e.g. USS Daedalus", "kind": "free label, e.g. ship / planet / villain",
+        "type": "navigation type: character/location/faction/species/item/tech/event/article (else from kind)",
+        "fields": "infobox fields, 'key=value; key=value'", "body": "a description (use == Heading == sections)",
         "categories": "comma-separated categories", "image": "optional image file to attach",
-        "canon": "canon tier: official / fanon / mine (default mine)", "source": "where the lore came from",
-        "force": "true to overwrite existing field values (change established lore)"},
+        "continuity": "which continuity/AU (default Main Canon)", "date": "a date, to place it on the timeline",
+        "links": "cross-world links 'continuity/slug, …' to the same subject elsewhere",
+        "source": "where the lore came from", "force": "true to change an existing field value"},
        risk="write", external=False)
-def codex_add(title: str, kind: str = "", fields: str = "", body: str = "", categories: str = "",
-              image: str = "", canon: str = "mine", source: str = "", force: bool = False) -> SkillResult:
+def codex_add(title: str, kind: str = "", type: str = "", fields: str = "", body: str = "",
+              categories: str = "", image: str = "", continuity: str = "", date: str = "", links: str = "",
+              source: str = "", force: bool = False) -> SkillResult:
     if not title.strip():
         raise ValueError("codex_add needs a title")
-    canon = canon.strip().lower() or "mine"
-    if canon not in _codex.CANON_TIERS:
-        raise ValueError(f"canon must be one of {', '.join(_codex.CANON_TIERS)}")
+    cont = _codex.resolve_continuity(continuity)
     new_fields = _parse_fields(fields)
-    existing = _codex.get(title.strip())
+    existing = _codex.get(title.strip(), cont)
     if existing and not force:                                 # flag contradictions before changing established lore
         clashes = _codex.conflicts(existing, new_fields)
-        tier_change = existing.get("canon", "mine") != canon and (existing.get("fields") or existing.get("body"))
-        if clashes or tier_change:
-            lines = [f"⚠ “{title.strip()}” already exists — this would change established lore. Not saved."]
-            for k, (old, new) in clashes.items():
-                lines.append(f"  - {k}: “{old}” → “{new}”")
-            if tier_change:
-                lines.append(f"  - canon tier: {existing.get('canon', 'mine')} → {canon}")
-            lines.append("Re-run with force=true to apply, or change the title to keep both versions "
-                         "(e.g. official vs your canon) separate.")
+        if clashes:
+            lines = [f"⚠ “{title.strip()}” already exists in {_cont_name(cont)} — this would change "
+                     "established lore. Not saved."]
+            lines += [f"  - {k}: “{old}” → “{new}”" for k, (old, new) in clashes.items()]
+            lines.append("Re-run with force=true to apply, or add it to a different continuity (an AU) to "
+                         "keep both versions separate.")
             return SkillResult("codex_add", False, "\n".join(lines),
                                {"conflicts": {k: {"old": o, "new": n} for k, (o, n) in clashes.items()},
-                                "title": title.strip()})
-    entry = _codex.save(title.strip(), kind=kind.strip(), fields=new_fields, body=body.strip(),
-                        categories=_parse_list(categories), image=image or None, canon=canon,
-                        source=source.strip())
+                                "title": title.strip(), "continuity": cont})
+    entry = _codex.save(title.strip(), kind=kind.strip(), type=type.strip(), fields=new_fields,
+                        body=body.strip(), categories=_parse_list(categories), image=image or None,
+                        continuity=cont, date=date.strip(), links=_parse_list(links), source=source.strip())
     note = f" with image {os.path.basename(entry['image'])}" if entry.get("image") else ""
-    tier = _codex.CANON_TIERS[entry["canon"]]
     return SkillResult("codex_add", True,
-                       f"Saved “{entry['title']}” ({entry.get('kind') or 'entry'}; {tier}) to your codex"
-                       f" — {len(entry['fields'])} field(s){note}. Slug: {entry['slug']}.", entry)
+                       f"Saved “{entry['title']}” ({_codex.TYPE_LABELS.get(entry['type'], entry['type'])[:-1]}"
+                       f" in {_cont_name(cont)}) — {len(entry['fields'])} field(s){note}. Slug: {entry['slug']}.",
+                       entry)
 
 
-@skill("codex_search", "Search your personal fan wiki for entries.",
-       {"query": "what to look for", "limit": "most entries to return (default 5)"},
+def _cont_name(slug: str) -> str:
+    c = _codex.continuity(slug)
+    return c["name"] if c else slug
+
+
+@skill("codex_search", "Search your world's entries, optionally within one continuity and/or of one type.",
+       {"query": "what to look for", "continuity": "limit to a continuity/AU (default: all)",
+        "type": "limit to a type (character/location/faction/…)", "limit": "most entries (default 5)"},
        risk="read", external=False)
-def codex_search(query: str, limit: int = 5) -> SkillResult:
-    hits = _codex.search(query, max(1, int(limit)))
+def codex_search(query: str, continuity: str = "", type: str = "", limit: int = 5) -> SkillResult:
+    cont = _codex.resolve_continuity(continuity) if continuity else None
+    hits = _codex.search(query, max(1, int(limit)), continuity=cont, type=type.strip())
     if not hits:
-        return SkillResult("codex_search", False, f"No codex entries match “{query}”. Add one with codex_add.")
+        return SkillResult("codex_search", False, f"No entries match “{query}”. Add one with codex_add.")
     lines = [f"{len(hits)} match(es) for “{query}”:"]
     for e in hits:
-        kind = f" [{e['kind']}]" if e.get("kind") else ""
+        tags = f" [{_cont_name(e['continuity'])} · {e.get('type', 'article')}]"
         snippet = (e.get("body") or ", ".join(f"{k}: {v}" for k, v in e.get("fields", {}).items()))[:120]
-        lines.append(f"- **{e['title']}**{kind}: {snippet}")
+        lines.append(f"- **{e['title']}**{tags}: {snippet}")
     return SkillResult("codex_search", True, "\n".join(lines),
                        {"query": query, "count": len(hits), "entries": hits})
 
 
-@skill("codex_get", "Show one entry from your personal fan wiki.",
-       {"name": "the entry's title or slug"}, risk="read", external=False)
-def codex_get(name: str) -> SkillResult:
-    entry = _codex.get(name)
+@skill("codex_get", "Show one entry from your world.",
+       {"name": "the entry's title or slug", "continuity": "which continuity/AU (default Main Canon)"},
+       risk="read", external=False)
+def codex_get(name: str, continuity: str = "") -> SkillResult:
+    entry = _codex.get(name, _codex.resolve_continuity(continuity))
     if entry is None:
-        return SkillResult("codex_get", False, f"No codex entry called “{name}”.")
-    return SkillResult("codex_get", True, _codex.to_markdown(entry), entry)
+        return SkillResult("codex_get", False, f"No entry called “{name}” in {_cont_name(_codex.resolve_continuity(continuity))}.")
+    text = _codex.to_markdown(entry)
+    cross = _codex.links_of(entry)
+    if cross:
+        text += "\n\nAlso in: " + ", ".join(f"{e['title']} ({c['name']})" for c, e in cross)
+    return SkillResult("codex_get", True, text, entry)
 
 
-@skill("codex_card", "Render a card image for one of your personal-wiki entries (embeds its image in SVG).",
-       {"name": "the entry's title or slug", "out": "image file (.svg to embed the image, or .png)",
-        "image": "override the entry's image"}, risk="read", external=False)
-def codex_card(name: str, out: str = "", image: str = "") -> SkillResult:
-    entry = _codex.get(name)
+@skill("codex_card", "Render a card image for one of your entries (embeds its image in SVG).",
+       {"name": "the entry's title or slug", "continuity": "which continuity/AU (default Main Canon)",
+        "out": "image file (.svg to embed the image, or .png)", "image": "override the entry's image"},
+       risk="read", external=False)
+def codex_card(name: str, continuity: str = "", out: str = "", image: str = "") -> SkillResult:
+    entry = _codex.get(name, _codex.resolve_continuity(continuity))
     if entry is None:
-        return SkillResult("codex_card", False, f"No codex entry called “{name}”.")
+        return SkillResult("codex_card", False, f"No entry called “{name}”.")
     img = image or _codex.image_path(entry) or ""
     model = _card.card_model(_codex.to_record(entry), image=img)
     if not out:
@@ -156,27 +167,87 @@ def _as_entries(record: dict) -> list:
     return []
 
 
-@skill("codex_import", "Import a saved record (worldbook / fic_spec / fic_progression / world file) into "
-       "your personal fan wiki as one or more entries, tagged with a canon tier.",
-       {"src": "the .json file to import", "canon": "canon tier for the imports: official / fanon / mine "
-        "(default fanon, since imports come from elsewhere)"}, risk="write", external=False)
-def codex_import(src: str, canon: str = "fanon") -> SkillResult:
+@skill("codex_import", "Import a saved record (worldbook / fic_spec / fic_progression / world file) into a "
+       "continuity of your world as one or more entries.",
+       {"src": "the .json file to import", "continuity": "which continuity/AU to import into (default Main "
+        "Canon); name a new one to keep references separate (e.g. 'Sources')"}, risk="write", external=False)
+def codex_import(src: str, continuity: str = "") -> SkillResult:
     src = os.path.expanduser(src)
     if not os.path.isfile(src):
         raise ValueError(f"no such file: {src}")
-    canon = canon.strip().lower() or "fanon"
-    if canon not in _codex.CANON_TIERS:
-        raise ValueError(f"canon must be one of {', '.join(_codex.CANON_TIERS)}")
+    cont = _codex.resolve_continuity(continuity)
+    if continuity and not _codex.continuity(continuity):       # create the named continuity if new
+        cont = _codex.add_continuity(continuity.strip(), ctype="au",
+                                     description="Imported reference material")["slug"]
     with open(src, encoding="utf-8") as f:
         record = json.load(f)
     entries = _as_entries(record) if isinstance(record, dict) else []
     if not entries:
         return SkillResult("codex_import", False, f"Didn't recognise any entries in {src}.")
-    saved = [_codex.save(canon=canon, **kw) for kw in entries]
+    saved = [_codex.save(continuity=cont, **kw) for kw in entries]
     return SkillResult("codex_import", True,
-                       f"Imported {len(saved)} entr{'y' if len(saved) == 1 else 'ies'} into your codex: "
-                       + ", ".join(e["title"] for e in saved[:10]) + ("…" if len(saved) > 10 else ""),
-                       {"count": len(saved), "titles": [e["title"] for e in saved]})
+                       f"Imported {len(saved)} entr{'y' if len(saved) == 1 else 'ies'} into "
+                       f"{_cont_name(cont)}: " + ", ".join(e["title"] for e in saved[:10])
+                       + ("…" if len(saved) > 10 else ""),
+                       {"count": len(saved), "continuity": cont, "titles": [e["title"] for e in saved]})
+
+
+@skill("codex_continuity", "List your continuities, or add one (a canon or an AU — alternate universe).",
+       {"name": "name of a continuity to add (leave blank to just list)",
+        "type": "'canon' or 'au' (default au)", "description": "a one-line description"},
+       risk="write", external=False)
+def codex_continuity(name: str = "", type: str = "au", description: str = "") -> SkillResult:
+    if name.strip():
+        c = _codex.add_continuity(name.strip(), ctype=(type.strip().lower() or "au"), description=description.strip())
+        verb = "Added"
+    else:
+        c = None
+        verb = "Your"
+    conts = _codex.continuities()
+    lines = [f"{verb} continuit{'y' if c else 'ies'}:" if not c else f"Added continuity “{c['name']}” ({c['type']})."]
+    for cc in conts:
+        n = len(_codex.all_entries(cc["slug"]))
+        lines.append(f"- **{cc['name']}** [{cc['type']}] — {n} entr{'y' if n == 1 else 'ies'}"
+                     + (f": {cc['description']}" if cc.get("description") else ""))
+    return SkillResult("codex_continuity", True, "\n".join(lines),
+                       {"continuities": conts, "added": c})
+
+
+@skill("codex_timeline", "Show a continuity's timeline — its dated entries in chronological order.",
+       {"continuity": "which continuity/AU (default Main Canon)"}, risk="read", external=False)
+def codex_timeline(continuity: str = "") -> SkillResult:
+    cont = _codex.resolve_continuity(continuity)
+    events = _codex.timeline(cont)
+    if not events:
+        return SkillResult("codex_timeline", False,
+                           f"No dated entries in {_cont_name(cont)}. Add a `date` to entries to place them "
+                           "on the timeline.")
+    lines = [f"# {_cont_name(cont)} — timeline ({len(events)})"]
+    for e in events:
+        lines.append(f"- **{e['date']}** — {e['title']}"
+                     + (f": {e['body'][:100]}" if e.get("body") else ""))
+    return SkillResult("codex_timeline", True, "\n".join(lines), {"continuity": cont, "events": events})
+
+
+@skill("codex_link", "Link the same subject across continuities (a cross-world connection).",
+       {"name": "the entry to add a link to", "continuity": "its continuity (default Main Canon)",
+        "to": "the linked entry as 'continuity/slug' (e.g. frostline-au/thor)"}, risk="write", external=False)
+def codex_link(name: str, to: str, continuity: str = "") -> SkillResult:
+    cont = _codex.resolve_continuity(continuity)
+    entry = _codex.get(name, cont)
+    if entry is None:
+        return SkillResult("codex_link", False, f"No entry called “{name}” in {_cont_name(cont)}.")
+    tcont, _, tslug = to.strip().partition("/")
+    if not _codex.get(tslug, tcont):
+        return SkillResult("codex_link", False, f"No entry at {to}. Use 'continuity-slug/entry-slug'.")
+    links = list(dict.fromkeys(entry.get("links", []) + [f"{_codex.resolve_continuity(tcont)}/{tslug}"]))
+    saved = _codex.save(entry["title"], kind=entry.get("kind", ""), type=entry.get("type", ""),
+                        fields=entry.get("fields", {}), body=entry.get("body", ""),
+                        categories=entry.get("categories", []), continuity=cont, date=entry.get("date", ""),
+                        links=links, source=entry.get("source", ""))
+    return SkillResult("codex_link", True,
+                       f"Linked “{saved['title']}” ({_cont_name(cont)}) to {to}. "
+                       f"{len(_codex.links_of(saved))} cross-world connection(s).", saved)
 
 
 @skill("codex_serve", "Serve your personal fan wiki as a local website (browse and add entries) with a "
@@ -226,8 +297,10 @@ def codex_export(out_dir: str = "") -> SkillResult:
     out_dir = os.path.expanduser(out_dir) if out_dir else os.path.join(_codex.base(), "markdown")
     os.makedirs(out_dir, exist_ok=True)
     entries = _codex.all_entries()
-    for e in entries:
-        with open(os.path.join(out_dir, e["slug"] + ".md"), "w", encoding="utf-8") as f:
+    for e in entries:                                          # continuity in the name so AUs don't collide
+        name = (f"{e['continuity']}__{e['slug']}.md" if e.get("continuity") != _codex.CANON_SLUG
+                else e["slug"] + ".md")
+        with open(os.path.join(out_dir, name), "w", encoding="utf-8") as f:
             f.write(_codex.to_markdown(e) + "\n")
     return SkillResult("codex_export", True,
                        f"Wrote {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} to {out_dir}. "
