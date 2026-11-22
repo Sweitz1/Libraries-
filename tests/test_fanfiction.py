@@ -318,15 +318,70 @@ class SpecSheetTest(unittest.TestCase):
         self.assertIn("bot-check", r.text)
 
 
+CAMPAIGN = """<!doctype html><html><head><title>SG1 in Faerun, ch 4</title></head><body>
+<div id=storytext class='storytext xcontrast_txt'>
+<p>Colonel O'Neill ducked behind the ruined pillar as the goblins charged.</p>
+<p>[Skill – Fireball obtained]</p>
+<p>[Level Up! O'Neill is now Level 5]</p>
+<p>O'Neill had learned to channel naquadah through the Weave, a trick no mage of Neverwinter had seen.</p>
+<p>O'Neill gained the ability to sense zat energy at a distance.</p>
+<p>Daniel translated the runes while the fight raged, but nothing new came to him here.</p>
+<p>[Class: Spellsword]</p>
+</div></body></html>"""
+
+
+class ProgressionTest(unittest.TestCase):
+    def setUp(self):
+        self.m = load()
+
+    def patch(self, html):
+        fake = mock.Mock(get=mock.Mock(return_value=Resp(html)))
+        return mock.patch.object(self.m, "fetcher", lambda **kw: fake)
+
+    def test_tracks_system_notifications_and_prose(self):
+        with self.patch(CAMPAIGN):
+            r = self.m.fic_progression("https://www.fanfiction.net/s/555/4/", "O'Neill")
+        self.assertTrue(r.ok)
+        texts = [e["text"] for e in r.data["timeline"]]
+        self.assertIn("[Skill – Fireball obtained]", texts)
+        self.assertIn("[Level Up! O'Neill is now Level 5]", texts)
+        self.assertIn("[Class: Spellsword]", texts)
+        self.assertTrue(any("channel naquadah through the Weave" in t for t in texts))
+        self.assertTrue(any("sense zat energy" in t for t in texts))
+        # Daniel's line mentions no progression for O'Neill and is left out
+        self.assertFalse(any("Daniel translated" in t for t in texts))
+        kinds = {e["kind"] for e in r.data["timeline"]}
+        self.assertEqual(kinds, {"system", "prose"})
+
+    def test_no_progression_is_reported(self):
+        plain = "<html><body><div id=storytext><p>They walked quietly through the long, empty hall.</p></div></body></html>"
+        with self.patch(plain):
+            r = self.m.fic_progression("https://www.fanfiction.net/s/555/4/", "O'Neill")
+        self.assertFalse(r.ok)
+        self.assertIn("No progression", r.text)
+
+    def test_bot_check_reported(self):
+        with self.patch(BOT_CHECK):
+            r = self.m.fic_progression("https://www.fanfiction.net/s/555/1/", "O'Neill")
+        self.assertFalse(r.ok)
+        self.assertIn("bot-check", r.text)
+
+    def test_chapter_range_builds_urls(self):
+        urls = self.m._chapter_urls("https://www.fanfiction.net/s/555/1/", "1-3")
+        self.assertEqual(urls, ["https://www.fanfiction.net/s/555/1/",
+                                "https://www.fanfiction.net/s/555/2/",
+                                "https://www.fanfiction.net/s/555/3/"])
+
+
 class RegistrationTest(unittest.TestCase):
     def test_registration_and_outside_content(self):
         from libra.skills import SkillRegistry
 
         reg = SkillRegistry()
         got = reg.load_plugins([os.path.join(ROOT, "plugins")], log=None)
-        want = {"fic_meta", "fic_community", "fic_text", "fic_spec"}
+        want = {"fic_meta", "fic_community", "fic_text", "fic_spec", "fic_progression"}
         self.assertEqual(want & set(got), want)
-        for name in ("fic_meta", "fic_community", "fic_text", "fic_spec"):
+        for name in ("fic_meta", "fic_community", "fic_text", "fic_spec", "fic_progression"):
             sk = reg.get(name)
             self.assertTrue(sk.untrusted_output)                    # web content marked outside
             self.assertEqual((sk.risk, sk.claimed_risk), ("write", "read"))  # held until accepted

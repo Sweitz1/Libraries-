@@ -11,6 +11,8 @@ These skills read exactly that, rather than (mostly) the story prose:
   - ``fic_text``       one chapter -> its story text, so a codex/tech-readout chapter can be read or added.
   - ``fic_spec``       a chapter + a subject name (e.g. a fan-made ship) -> a *spec sheet* built from the
                        story's own codex/tech-readout block, optionally cross-referenced to canon wikis.
+  - ``fic_progression``a chapter (or range) + a character -> the new abilities/skills/levels they gain, from
+                       LitRPG ``[Skill]``/``[Level Up]`` notifications and "learned/gained/unlocked" prose.
 
     libra skill run fic_meta https://www.fanfiction.net/s/11111/1/
     libra skill run fic_community https://www.fanfiction.net/community/Crossovers/1076/ --out list.json
@@ -353,6 +355,115 @@ def _render_spec(r: dict, out: str) -> str:
     lines += ["", f"Source: {r['url']}  [fanfiction.net codex]"]
     if out:
         lines += ["", f"[spec sheet written to {out}]"]
+    return "\n".join(lines)
+
+
+# ----------------------------------------------- character evolution / progression
+# A LitRPG "system" notification is bracketed, e.g. [Skill – Fireball obtained], [Level Up!], [Class: Mage].
+_SYS_KEY = re.compile(r"skill|level|class|spell|feat|abilit|power|title|rank|quest|learned|gained|obtain|"
+                      r"unlock|evolv|\bnew\b|\bup\b|xp|experience|proficien|cantrip|mana|perk|trait", re.I)
+# Prose cues that a character gained a new capability.
+_PROG_CUE = re.compile(r"\b(learn(?:s|ed|t)?|gain(?:s|ed)?|acquir\w+|master(?:s|ed)?|unlock\w+|obtain\w+|"
+                       r"develop(?:s|ed)?|discover\w+|awaken\w+|evolv\w+|level(?:s|ed)?\s*up|"
+                       r"reach(?:es|ed)?\s+(?:level|rank)|can now (?:cast|use|summon|wield|do|create)|"
+                       r"new (?:spell|skill|feat|power|abilit\w+|class|title|rank))\b", re.I)
+
+
+def _sentences(text: str) -> list:
+    return re.split(r"(?<=[.!?])\s+|\n+", text)
+
+
+def _chapter_urls(url: str, chapters: str) -> list:
+    m = re.search(r"/s/(\d+)/(\d+)", url)
+    if not m or not chapters.strip():
+        return [url]
+    parts = urlsplit(url)
+    base = f"{parts.scheme}://{parts.netloc}/s/{m.group(1)}/"
+    rng = re.match(r"\s*(\d+)\s*-\s*(\d+)\s*$", chapters)
+    if rng:
+        a, b = sorted((int(rng.group(1)), int(rng.group(2))))
+        nums = range(a, min(b, a + 19) + 1)                    # cap at 20 chapters
+    else:
+        nums = ([int(x) for x in re.findall(r"\d+", chapters)] or [int(m.group(2))])[:20]
+    return [base + str(n) + "/" for n in nums]
+
+
+def _progression_events(text: str, character: str, at: str) -> list:
+    events, sub = [], character.lower()
+    for m in re.finditer(r"\[([^\[\]]{2,90})\]", text):        # LitRPG system notifications
+        inner = m.group(1).strip()
+        if _SYS_KEY.search(inner) or len(re.findall(r"\b[A-Z][a-z]+", inner)) >= 2:
+            events.append({"at": at, "kind": "system", "text": "[" + re.sub(r"\s+", " ", inner) + "]"})
+    for sent in _sentences(text):                              # prose "learned/gained …" about the character
+        if sub in sent.lower() and _PROG_CUE.search(sent):
+            s = re.sub(r"\s+", " ", sent).strip()
+            if 12 <= len(s) <= 300:
+                events.append({"at": at, "kind": "prose", "text": s})
+    return events
+
+
+@skill("fic_progression", "Track a character's evolution across a fanfiction — the new abilities, skills, "
+       "spells, feats and levels they gain (LitRPG [Skill]/[Level Up] notifications and learned/gained prose).",
+       {"url": "a chapter URL, e.g. https://www.fanfiction.net/s/<id>/1/",
+        "character": "whose progression to track, e.g. O'Neill",
+        "chapters": "optional chapter range to scan, e.g. 1-12 (default: just this chapter)",
+        "out": "optional .json file to write the timeline to"},
+       risk="read", external=True)
+def fic_progression(url: str, character: str, chapters: str = "", out: str = "") -> SkillResult:
+    from libra.web import parse_html
+
+    if not character.strip():
+        raise ValueError("fic_progression needs a character name")
+    timeline, seen, scanned = [], set(), 0
+    for i, chap_url in enumerate(_chapter_urls(url, chapters), 1):
+        try:
+            resp = fetcher(delay=0.3).get(chap_url)
+        except Exception:
+            continue
+        if resp.status != 200:
+            continue
+        if _looks_blocked(resp):
+            if scanned == 0:
+                return SkillResult("fic_progression", False,
+                                   "fanfiction.net returned its bot-check page instead of the chapter. Open it "
+                                   "in a browser, save the HTML, and read that.")
+            break
+        text = _story_text(parse_html(resp.text))
+        if not text.strip():
+            continue
+        scanned += 1
+        chap_no = re.search(r"/s/\d+/(\d+)", chap_url)
+        at = f"ch {chap_no.group(1)}" if (chapters.strip() and chap_no) else ""
+        for e in _progression_events(text, character, at):
+            key = e["text"].lower()
+            if key not in seen:
+                seen.add(key)
+                timeline.append(e)
+    if scanned == 0:
+        return SkillResult("fic_progression", False,
+                           f"Couldn't read any chapter text from {url} (is it a chapter page, …/s/<id>/<n>/?).")
+    if not timeline:
+        return SkillResult("fic_progression", False,
+                           f"No progression events for “{character}” found in {scanned} chapter(s) — no "
+                           "[Skill]/[Level Up] notifications or learned/gained lines naming them.")
+    record = {"character": character, "url": url, "chapters_scanned": scanned, "count": len(timeline),
+              "timeline": timeline}
+    if out:
+        with open(os.path.expanduser(out), "w", encoding="utf-8") as f:
+            json.dump(record, f, ensure_ascii=False, indent=2)
+    return SkillResult("fic_progression", True, _render_progression(record, out), record)
+
+
+def _render_progression(r: dict, out: str) -> str:
+    lines = [f"# {r['character']} — capabilities gained",
+             f"{r['count']} events across {r['chapters_scanned']} chapter(s)", ""]
+    for e in r["timeline"]:
+        tag = (e["at"] + " ") if e["at"] else ""
+        mark = "⚙ " if e["kind"] == "system" else "• "
+        lines.append(f"{mark}{tag}{e['text']}")
+    lines += ["", f"Source: {r['url']}  [fanfiction.net]"]
+    if out:
+        lines += ["", f"[timeline written to {out}]"]
     return "\n".join(lines)
 
 
