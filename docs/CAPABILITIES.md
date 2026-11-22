@@ -42,6 +42,7 @@ are all implemented in this repository.
 ## Skills, tools and trust
 
 - **PDF to text** (`plugins/pdf_text.py`): a stdlib-only extractor (zlib for compressed streams) with a system-`pdftotext` fallback, so a PDF's text can go into the knowledge base. Scanned image-only PDFs still need OCR.
+- **Media to text, optional plugins** (`plugins/media_text.py`): `image_ocr` (tesseract), `audio_transcribe` (whisper) and `video_transcribe` (ffmpeg + whisper). Each runs only if its tool is installed and says what to install otherwise, keeping Libra's core free of outside models.
 - **12 built-in skills:** `calc`, `scrape`, `crawl`, `links`, `summarize`, `translate`, `detect_language`,
   `romanize`, `remember`, `recall`, `forget`, `time`.
 - **Plugins:** `.py` files using `@skill`. A plugin's own risk labels aren't trusted until you accept the
