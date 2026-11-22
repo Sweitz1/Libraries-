@@ -381,6 +381,44 @@ systemctl list-timers 'libra-*'             # when they run next
 
 ---
 
+## 9. Learn from the web, and your own wiki (optional plugins)
+
+Libra can build training data straight from the internet and from documents, and keep a personal fan wiki
+it pulls from. The core needs nothing extra; the richer sources are **optional plugins** you enable once.
+
+**Train from the web** (no plugin needed):
+
+```bash
+libra data --url https://example.org/article --crawl https://example.org/docs --out data/web
+libra train data/web --out checkpoints/model        # or let `libra auto` collect → filter → train
+```
+
+`libra data` also reads local `.txt .md .html .json .jsonl .csv` and, with the document plugins below,
+`.pdf .docx .pptx .xlsx .epub .rtf` and media transcripts. Fetches honour the SSRF guard; add
+`--allow-private` only for a LAN/localhost source you trust.
+
+**Enable the plugins** — point Libra at the folder, then accept each file once (its risk labels aren't
+trusted until you do):
+
+```bash
+cp plugins/*.py ~/.libra/plugins/            # loaded automatically from here (or pass --plugins plugins/)
+libra trust accept-plugin ~/.libra/plugins/worldbook.py   # repeat per plugin you use
+libra skill list                              # see what's available
+```
+
+| Plugin | Gives you |
+|---|---|
+| `documents` (built in) / `pdf_text` / `media_text` | ingest PDFs, Office/eBook files, and image/audio/video transcripts |
+| `lorebook` (`worldbook`, `worldbook_search`, `world_build`) | structured lore/specs from Fandom/MediaWiki fan wikis; search and build a combined world file |
+| `fanfiction` (`fic_meta`, `fic_community`, `fic_text`, `fic_spec`, `fic_progression`) | fanfiction.net metadata, a fan-ship spec sheet from a story's codex, and a character's progression |
+| `cards` (`card`) | render a Fandom-style spec/character card as PNG (native) or SVG |
+| `codex` (`codex_add`, `codex_search`, `codex_card`, `codex_import`, `codex_export`, `codex_serve`) | a **personal fan wiki** under `~/.libra/codex` — add entries and images, browse them at a local website, and have the AI pull from them |
+
+`codex_serve` runs a browsable local site (`http://127.0.0.1:8800/`) whose MediaWiki-compatible `api.php`
+lets `worldbook`/`world_build` read your own codex like a Fandom wiki. It binds to localhost; don't expose
+it on `0.0.0.0` (no auth). Libra renders cards and pages from your data but has **no image model**, so it
+doesn't draw artwork — upload your own with `--image`.
+
 ## Where next
 
 - **Use it:** the [README](README.md) covers training, goals, the knowledge base, translation and skills.
