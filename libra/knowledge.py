@@ -36,9 +36,10 @@ TEXT_EXT = {".txt", ".md", ".rst", ".text", ".log"}
 HTML_EXT = {".html", ".htm", ".xhtml"}
 TRANSCRIPT_EXT = {".srt", ".vtt"}
 DATA_EXT = {".json", ".jsonl", ".csv", ".tsv"}
+from .documents import DOC_EXT  # noqa: E402  (docx, pptx, xlsx, epub, odt/odp/ods, rtf)
 MEDIA_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".mp3", ".wav", ".m4a", ".ogg", ".flac",
              ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp"}
-SUPPORTED = TEXT_EXT | HTML_EXT | TRANSCRIPT_EXT | DATA_EXT
+SUPPORTED = TEXT_EXT | HTML_EXT | TRANSCRIPT_EXT | DATA_EXT | DOC_EXT
 CLARIFY_MARKER = "Your files cover this in more than one place:"
 
 STOPWORDS = set("""a an and are as at be been but by can could did do does for from had has have he her his how i if in
@@ -242,9 +243,16 @@ def _media_sibling(path: str) -> str:
 
 def read_passages(path: str) -> list[Passage]:
     ext = os.path.splitext(path)[1].lower()
+    media = _media_sibling(path)
+    if ext in DOC_EXT:  # docx, pptx, xlsx, epub, odt/odp/ods, rtf → plain text, then line-chunked
+        from .documents import extract
+
+        passages = _chunk_lines(extract(path).split("\n"), path)
+        for p in passages:
+            p.media = media
+        return passages
     with open(path, encoding="utf-8", errors="replace") as f:
         raw = f.read()
-    media = _media_sibling(path)
     if ext in TRANSCRIPT_EXT:
         return _chunk_cues(parse_transcript(raw), path, media)
     if ext in HTML_EXT:

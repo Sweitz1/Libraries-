@@ -474,9 +474,11 @@ How it behaves:
 - **It learns from you.** Corrections and rules are saved in the workspace folder (`corrections.json`, `rules.json`) and apply to every later answer.
 - **It can match your style.** `libra kb export datasets/me` writes your files and corrections as training data. Then `libra train datasets/me` teaches a Libra model your vocabulary and tone.
 
-Supported files: `.txt` `.md` `.html` `.csv` `.json`/`.jsonl` (including chat logs) and **`.srt`/`.vtt` transcripts with timestamps**.
+Supported files: `.txt` `.md` `.rst` `.html` `.csv` `.json`/`.jsonl` (including chat logs), **`.srt`/`.vtt` transcripts with timestamps**, and documents read from scratch (no libraries): **`.docx` `.pptx` `.xlsx` `.epub` `.odt`/`.odp`/`.ods` `.rtf`**. PDFs via the `pdf_text` plugin.
 
-**Images, audio and video:** Libra has no vision or speech model, so it can't look at a picture or listen to a recording. Put a transcript or description next to the file with the same name, for example `talk.mp4` + `talk.vtt`, or `whiteboard.jpg` + `whiteboard.txt`. Libra then indexes it and cites the media file. `/add` lists any media it found without one. PDFs aren't read yet; export them to text first.
+**Documents** (`.docx`, `.pptx`, `.xlsx`, `.epub`, OpenDocument, `.rtf`) are extracted to text with the standard library only (`zipfile` + XML), so Office and ebook files are indexed and cited like any text file. See [`libra/documents.py`](libra/documents.py).
+
+**Images, audio and video:** Libra has no vision or speech model, so it can't look at a picture or listen to a recording. Two choices: put a transcript or description next to the file (`talk.mp4` + `talk.vtt`, `whiteboard.jpg` + `whiteboard.txt`), which is indexed and cited as that media file; or load an optional plugin that calls an outside tool (OCR for images, Whisper for audio, ffmpeg for video). `/add` lists any media it found without a transcript. **PDF:** the `pdf_text` plugin extracts the text (`libra skill run pdf_text report.pdf --out report.txt`).
 
 **Limits:** Matching is by words, not meaning, so a question phrased very differently from your files may come back "not found". Rephrase it, or add a correction so that phrasing works next time. Answers quote your files rather than paraphrasing them.
 

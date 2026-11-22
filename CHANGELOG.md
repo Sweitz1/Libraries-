@@ -5,6 +5,7 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 ## [Unreleased]
 
 ### Added
+- **Document formats, read with the standard library only** (`libra/documents.py`): DOCX, PPTX, XLSX, EPUB, ODT/ODP/ODS and RTF are extracted to text (Office and ebook files are ZIP+XML; RTF is control-word text), so `libra kb add` and `libra data` digest them like any text file. Untrusted documents are guarded against XML-entity bombs (DOCTYPE/ENTITY refused) and zip bombs (uncompressed-size cap).
 - **`plugins/pdf_text.py`**: a PDF-to-text plugin. It extracts text with the standard library only (inflating compressed content streams with `zlib`), falling back to the system `pdftotext` when installed, so a PDF can be added to the knowledge base (`libra skill run pdf_text report.pdf --out report.txt`). A scanned, image-only PDF has no text to pull out and is reported as needing OCR.
 
 ### Fixed

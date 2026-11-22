@@ -30,6 +30,10 @@ are all implemented in this repository.
   go through the private-address guard.
 - **Knowledge base:** your files become grounded, cited answers (BM25 passage search). It quotes the source
   and refuses rather than guessing. Corrections and style rules are remembered.
+- **File formats, read from scratch** (no third-party libraries): text, Markdown, HTML, CSV/TSV, JSON/JSONL,
+  `.srt`/`.vtt` subtitles (cited by timestamp), and documents — **DOCX, PPTX, XLSX, EPUB, ODT/ODP/ODS and
+  RTF** (`libra/documents.py`, via `zipfile` + XML). PDF via the `pdf_text` plugin. Untrusted documents are
+  guarded against XML-entity and zip bombs.
 - **Translation:** translation memory (Tatoeba, OPUS/Moses, TMX, JSONL, CSV) with an inverted index; exact →
   adapted near match → optional neural model → word-by-word gloss → pivot through English, each result
   reporting its method and confidence. IBM Model 1 alignment. **Language detection** across 28 languages,
