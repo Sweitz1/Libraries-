@@ -53,6 +53,18 @@ class SiteTest(unittest.TestCase):
         self.assertIn(b"BC-304", body)
         self.assertIn(b"Ships", body)
 
+    def test_entry_page_is_fandom_styled(self):
+        self.codex.save("Thor", kind="character", fields={"race": "Asgard"},
+                        body="The '''Thor''' is an Asgard.\n== Role ==\nSupreme Commander.",
+                        categories=["Asgard"])
+        _, body = get(self.base + "/wiki/thor")
+        text = body.decode()
+        self.assertIn('class="portable-infobox"', text)        # Fandom infobox classes
+        self.assertIn('pi-data-label', text)
+        self.assertIn('pi-data-value', text)
+        self.assertIn('<h2 class="sec">Role</h2>', text)       # == Role == became a section
+        self.assertIn("<b>Thor</b>", text)                     # '''bold''' rendered
+
     def test_api_parse_is_mediawiki_shaped(self):
         status, body = get(self.base + "/api.php?" + urlencode({"action": "parse", "page": "USS Daedalus",
                                                                 "format": "json"}))

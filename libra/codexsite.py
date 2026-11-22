@@ -24,22 +24,53 @@ from . import codex
 
 _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{title}</title><style>
-:root{{color-scheme:light dark}}
-body{{font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;max-width:860px;margin:0 auto;padding:24px;
-line-height:1.5;background:#fbfbfd;color:#1c2127}}
-@media(prefers-color-scheme:dark){{body{{background:#14171c;color:#e6e9ee}}a{{color:#8ab4ff}}
-.box{{background:#1c2127;border-color:#2a2f37}}.ib th{{background:#222834}}}}
-a{{color:#2b5bd7;text-decoration:none}}a:hover{{text-decoration:underline}}
-h1{{margin:0 0 4px}}.kind{{color:#8a93a3;font-size:14px;margin-bottom:16px}}
-.box{{background:#fff;border:1px solid #e2e6ec;border-radius:10px;padding:16px;margin:16px 0}}
-.ib{{border-collapse:collapse;width:100%}}.ib th{{text-align:left;background:#eef1f5;width:34%;padding:6px 8px;
-vertical-align:top}}.ib td{{padding:6px 8px;vertical-align:top}}.ib tr+tr{{border-top:1px solid #e2e6ec}}
-input,textarea,select,button{{font:inherit;padding:8px;border:1px solid #c7ceda;border-radius:8px;
-width:100%;box-sizing:border-box;margin:4px 0 12px;background:transparent;color:inherit}}
-button{{width:auto;background:#2b3a57;color:#fff;border:0;cursor:pointer;padding:9px 18px}}
-label{{font-weight:600;font-size:14px}}.cat{{color:#8a93a3;font-size:14px;margin-top:12px}}
-img.art{{max-width:100%;border-radius:10px;margin:8px 0}}.muted{{color:#8a93a3}}
-</style></head><body>{body}</body></html>"""
+:root{{color-scheme:light dark;--bg:#f5f6f8;--panel:#fff;--ink:#1a1d24;--muted:#72777f;--line:#d8dbe0;
+--accent:#2e4374;--accentink:#fff;--rowalt:#f3f5f8;--link:#1f5fbf}}
+@media(prefers-color-scheme:dark){{:root{{--bg:#101318;--panel:#171b21;--ink:#e6e9ee;--muted:#9aa2ad;
+--line:#2a2f37;--accent:#33508a;--rowalt:#1d222a;--link:#8ab4ff}}}}
+*{{box-sizing:border-box}}
+body{{font-family:'Segoe UI',system-ui,Helvetica,Arial,sans-serif;margin:0;background:var(--bg);color:var(--ink);
+line-height:1.55}}
+a{{color:var(--link);text-decoration:none}}a:hover{{text-decoration:underline}}
+.site{{background:var(--accent);color:var(--accentink);padding:10px 20px;display:flex;align-items:center;gap:14px}}
+.site a{{color:var(--accentink);font-weight:700}}.site .s{{margin-left:auto}}
+.site input{{border:0;border-radius:16px;padding:6px 12px;width:min(260px,46vw)}}
+.wrap{{max-width:960px;margin:0 auto;padding:22px 20px 60px}}
+.article{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px 26px;overflow:hidden}}
+.article:after{{content:"";display:block;clear:both}}
+h1.page{{margin:0 0 2px;font-size:30px;font-weight:800}}
+.tagline{{color:var(--muted);font-size:14px;border-bottom:2px solid var(--line);padding-bottom:12px;margin-bottom:16px}}
+.lead p{{margin:0 0 12px}}
+h2.sec{{font-size:21px;font-weight:700;border-bottom:1px solid var(--line);padding-bottom:4px;margin:26px 0 10px}}
+.catbar{{clear:both;margin-top:26px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:13px}}
+.catbar b{{color:var(--ink)}}
+/* Fandom-style portable infobox */
+.portable-infobox{{float:right;width:300px;margin:4px 0 18px 24px;background:var(--panel);border:1px solid var(--line);
+border-radius:10px;overflow:hidden;font-size:14px;box-shadow:0 1px 3px rgba(0,0,0,.07)}}
+.pi-title{{background:var(--accent);color:var(--accentink);font-weight:700;text-align:center;padding:11px 10px;font-size:17px}}
+.pi-image img{{display:block;width:100%}}.pi-image-caption{{text-align:center;color:var(--muted);font-size:12px;padding:4px 8px}}
+.portable-infobox h2,.portable-infobox h3{{margin:0;font-size:inherit;font-weight:inherit}}
+.pi-data{{display:flex;align-items:stretch;border-top:1px solid var(--line)}}.pi-data:nth-child(odd){{background:var(--rowalt)}}
+.pi-data-label{{flex:0 0 42%;font-weight:700;font-size:14px;padding:7px 10px}}
+.pi-data-value{{flex:1;font-size:14px;padding:7px 10px;min-width:0;word-wrap:break-word}}
+.pi-header{{background:var(--rowalt);font-weight:700;text-align:center;padding:5px;border-top:1px solid var(--line);
+text-transform:uppercase;font-size:12px;letter-spacing:.04em;color:var(--muted)}}
+/* index + form */
+.box{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:18px 0}}
+.entries{{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}}
+.entries a.card{{display:block;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--panel)}}
+.entries a.card:hover{{border-color:var(--accent);text-decoration:none}}
+.entries .t{{font-weight:700;color:var(--ink)}}.entries .k{{color:var(--muted);font-size:13px}}
+label{{font-weight:600;font-size:14px;display:block;margin-top:8px}}
+input,textarea,select{{font:inherit;padding:9px;border:1px solid var(--line);border-radius:8px;width:100%;
+margin:4px 0 10px;background:var(--bg);color:inherit}}
+button{{font:inherit;background:var(--accent);color:var(--accentink);border:0;border-radius:8px;cursor:pointer;
+padding:10px 20px;font-weight:600}}
+.muted{{color:var(--muted)}}
+@media(max-width:640px){{.portable-infobox{{float:none;width:auto;margin:0 0 16px}}.wrap{{padding:16px}}}}
+</style></head><body><header class=site><a href="/">&#128214; Codex</a>
+<form class=s method=get action="/"><input name=q placeholder="Search the codex…"></form></header>
+<div class=wrap>{body}</div></body></html>"""
 
 
 def build_wikitext(entry: dict) -> str:
@@ -82,36 +113,86 @@ def _parse_multipart(body: bytes, boundary: bytes):
 
 
 # ----------------------------------------------------------------- HTML views
+def _infobox_html(entry: dict) -> str:
+    """A Fandom portable-infobox: title bar, image, label/value rows (same classes Fandom uses)."""
+    parts = [f'<aside class="portable-infobox"><h2 class="pi-title">{html.escape(entry.get("title", ""))}</h2>']
+    if entry.get("image"):
+        cap = html.escape(entry.get("kind") or "")
+        parts.append(f'<figure class="pi-image"><img src="/{html.escape(entry["image"])}" alt="">'
+                     + (f'<figcaption class="pi-image-caption">{cap}</figcaption>' if cap else "") + "</figure>")
+    if entry.get("kind"):
+        parts.append('<div class="pi-header">Overview</div>'
+                     f'<div class="pi-item pi-data"><h3 class="pi-data-label">Type</h3>'
+                     f'<div class="pi-data-value">{html.escape(entry["kind"])}</div></div>')
+    for key, value in entry.get("fields", {}).items():
+        parts.append(f'<div class="pi-item pi-data"><h3 class="pi-data-label">{html.escape(str(key))}</h3>'
+                     f'<div class="pi-data-value">{html.escape(str(value))}</div></div>')
+    parts.append("</aside>")
+    return "".join(parts)
+
+
+def _inline(text: str) -> str:
+    """Escape, then apply light wikitext: '''bold''', ''italic'', [[link]] / [[a|label]]."""
+    t = html.escape(text, quote=False)
+    t = re.sub(r"\[\[[^\]|]*\|([^\]]+)\]\]", r"\1", t)
+    t = re.sub(r"\[\[([^\]]+)\]\]", r"\1", t)
+    t = re.sub(r"'''(.+?)'''", r"<b>\1</b>", t)
+    t = re.sub(r"''(.+?)''", r"<i>\1</i>", t)
+    return t
+
+
+def _body_html(body: str) -> str:
+    """Render the description, turning '== Heading ==' or '## Heading' lines into section headers."""
+    out, para = [], []
+
+    def flush():
+        if para:
+            out.append("<p>" + _inline(" ".join(para)) + "</p>")
+            para.clear()
+
+    for line in body.splitlines():
+        m = re.match(r"\s*(?:={2,}\s*(.+?)\s*={2,}|#{2,3}\s+(.+?))\s*$", line)
+        if m:
+            flush()
+            out.append(f'<h2 class="sec">{_inline(m.group(1) or m.group(2))}</h2>')
+        elif line.strip():
+            para.append(line.strip())
+        else:
+            flush()
+    flush()
+    return "".join(out)
+
+
 def _render_entry(entry: dict) -> str:
-    rows = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(str(v))}</td></tr>"
-                   for k, v in entry.get("fields", {}).items())
-    img = f'<img class="art" src="/{html.escape(entry["image"])}" alt="">' if entry.get("image") else ""
-    body = f"<p>{html.escape(entry['body'])}</p>" if entry.get("body") else ""
-    cats = ("<div class=cat>Categories: " + ", ".join(html.escape(c) for c in entry["categories"]) + "</div>"
-            if entry.get("categories") else "")
-    infobox = f'<div class=box>{img}<table class=ib>{rows}</table></div>' if (rows or img) else ""
-    return (f'<p><a href="/">&larr; all entries</a></p><h1>{html.escape(entry.get("title", ""))}</h1>'
-            f'<div class=kind>{html.escape(entry.get("kind") or "entry")}</div>{infobox}{body}{cats}')
+    infobox = _infobox_html(entry) if (entry.get("fields") or entry.get("image") or entry.get("kind")) else ""
+    lead = f'<div class="lead">{_body_html(entry["body"])}</div>' if entry.get("body") else ""
+    tagline = f'<div class="tagline">{html.escape(entry.get("kind") or "entry")}</div>'
+    cats = ('<div class="catbar"><b>Categories:</b> '
+            + " &middot; ".join(f'<a href="/?q={html.escape(c)}">{html.escape(c)}</a>' for c in entry["categories"])
+            + "</div>" if entry.get("categories") else "")
+    empty = "" if (lead or infobox) else '<p class="muted">This entry has no description or fields yet.</p>'
+    return (f'<article class="article"><h1 class="page">{html.escape(entry.get("title", ""))}</h1>{tagline}'
+            f'{infobox}{lead}{empty}{cats}</article>')
 
 
 def _render_index(entries: list, query: str = "") -> str:
-    items = "".join(f'<li><a href="/wiki/{html.escape(e["slug"])}">{html.escape(e["title"])}</a>'
-                    f' <span class=muted>{html.escape(e.get("kind") or "")}</span></li>' for e in entries)
-    listing = f"<ul>{items}</ul>" if items else "<p class=muted>No entries yet — add one below.</p>"
-    form = ('<div class=box><h2>Add / update an entry</h2>'
+    cards = "".join(f'<a class="card" href="/wiki/{html.escape(e["slug"])}"><div class="t">{html.escape(e["title"])}'
+                    f'</div><div class="k">{html.escape(e.get("kind") or "entry")}</div></a>' for e in entries)
+    listing = (f'<ul class="entries">{cards}</ul>' if cards
+               else '<p class="muted">No entries yet — add one below.</p>')
+    form = ('<div class="box"><h2>Add / update an entry</h2>'
             '<form method=post action="/add" enctype="multipart/form-data">'
             '<label>Title</label><input name=title required>'
             '<label>Kind</label><input name=kind placeholder="character / item / tech / ship / place">'
-            '<label>Fields (one per line, key = value)</label>'
+            '<label>Fields (one per line, key = value) — these become the infobox table</label>'
             '<textarea name=fields rows=5 placeholder="class = BC-304&#10;crew = 200"></textarea>'
-            '<label>Body</label><textarea name=body rows=3></textarea>'
+            '<label>Description (use == Heading == for sections)</label><textarea name=body rows=5></textarea>'
             '<label>Categories (comma-separated)</label><input name=categories>'
             '<label>Image</label><input type=file name=image accept="image/*">'
             '<button type=submit>Save entry</button></form></div>')
-    search = (f'<form method=get action="/"><input name=q value="{html.escape(query)}" '
-              'placeholder="Search your codex…"></form>')
     heading = f"Search: {html.escape(query)}" if query else "Your codex"
-    return f"<h1>{html.escape(heading)}</h1>{search}{listing}{form}"
+    count = f'<span class="muted"> &mdash; {len(entries)} entr{"y" if len(entries) == 1 else "ies"}</span>'
+    return f'<h1 class="page">{html.escape(heading)}{count}</h1><div style="height:12px"></div>{listing}{form}'
 
 
 class _Handler(BaseHTTPRequestHandler):
