@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Libra
+GenericName=AI Control Hub
+Comment=Open the Libra app: self-hosted model, agent, knowledge base and world engine
+Exec=xdg-open http://localhost:8000/
+Icon=libra
+Terminal=false
+Categories=Network;Utility;Development;Education;
+Keywords=libra;ai;llm;agent;assistant;wiki;worldbuilding;
+StartupNotify=false

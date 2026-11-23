@@ -218,6 +218,27 @@
   </section>
 
   <section id="training" hidden>
+    <div class="card" id="au-config">
+      <h2 style="margin:0 0 4px">Configuration</h2>
+      <p class="muted" id="cfg-note">What the nightly training run reads, and whether it runs. Your changes save to this machine only.</p>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:6px 0"><input type="checkbox" id="cfg-enabled" style="width:auto">
+        Training is on (runs on its schedule when enabled)</label>
+      <div class="row" style="flex-wrap:wrap;gap:12px">
+        <div style="flex:1 1 200px"><label class="muted" for="cfg-name">Model name</label>
+          <input id="cfg-name" autocapitalize="off" spellcheck="false"></div>
+        <div style="flex:0 0 140px"><label class="muted" for="cfg-steps">Steps per run</label>
+          <input id="cfg-steps" type="number" min="1" inputmode="numeric"></div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:6px 0"><input type="checkbox" id="cfg-private" style="width:auto">
+        Allow private / local-network addresses (advanced — off is safer)</label>
+      <h3 style="margin:12px 0 4px">Sources</h3>
+      <p class="muted">Where to learn from. Each row is one source.</p>
+      <div id="cfg-sources"></div>
+      <div class="row"><button class="btn small secondary" id="cfg-add">Add source</button><span></span></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="cfg-save">Save</button>
+        <button class="btn small secondary" id="cfg-reset">Reset</button></div>
+      <p class="muted" id="cfg-state"></p>
+    </div>
     <div class="card">
       <div class="row">
         <button class="btn" id="au-run">Run now</button>

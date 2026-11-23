@@ -173,6 +173,25 @@ cat > "$STAGE/etc/avahi/services/libra.service" <<'EOF'
 </service-group>
 EOF
 
+# ------------------------------------------------------------------ desktop integration
+# Applications-menu launchers and the "libra" icon, so Libra appears in the desktop
+# menu (Raspberry Pi OS Desktop, GNOME, KDE, ...) and opens the web app in a browser.
+say "staging desktop launchers and icons"
+install -d "$STAGE/usr/share/applications"
+install -m 0644 "$SRC/deploy/desktop/libra.desktop"       "$STAGE/usr/share/applications/libra.desktop"
+install -m 0644 "$SRC/deploy/desktop/libra-codex.desktop" "$STAGE/usr/share/applications/libra-codex.desktop"
+for pair in "favicon-32.png:32x32" "icon-192.png:192x192" "icon-512.png:512x512"; do
+  png="${pair%%:*}"; size="${pair##*:}"
+  if [ -f "$SRC/libra/webui/$png" ]; then
+    install -d "$STAGE/usr/share/icons/hicolor/$size/apps"
+    install -m 0644 "$SRC/libra/webui/$png" "$STAGE/usr/share/icons/hicolor/$size/apps/libra.png"
+  fi
+done
+if [ -f "$SRC/libra/webui/icon.svg" ]; then
+  install -d "$STAGE/usr/share/icons/hicolor/scalable/apps"
+  install -m 0644 "$SRC/libra/webui/icon.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/libra.svg"
+fi
+
 # ------------------------------------------------------------------ control
 INSTALLED_KB=$(du -sk "$STAGE" | cut -f1)
 cat > "$STAGE/DEBIAN/control" <<EOF

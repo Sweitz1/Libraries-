@@ -26,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -98,6 +99,120 @@ def write_template(path: str) -> None:
         raise FileExistsError(f"{path} already exists")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(TEMPLATE, f, indent=2)
+
+
+# ------------------------------------------------------- editing from the app
+# A source is one row with exactly one "kind" key. Web kinds carry a URL; "gutenberg" an id;
+# "files" a local path. These are the only keys the config page lets a person set per row.
+SOURCE_KINDS = ("crawl", "feed", "sitemap", "url", "gutenberg", "files")
+# Per-kind numeric options (name -> (low, high)); include/exclude are free regex strings.
+_SOURCE_INTS = {"max_pages": (1, 5000), "depth": (1, 6), "max_items": (1, 500)}
+_SOURCE_STRS = ("include", "exclude")
+
+
+def _clean_source(src: dict) -> dict:
+    """Validate and normalise one source row from the app; raise ValueError on anything unexpected."""
+    if not isinstance(src, dict):
+        raise ValueError("each source must be an object")
+    kinds = [k for k in SOURCE_KINDS if k in src and str(src.get(k, "")).strip() != ""]
+    if len(kinds) != 1:
+        raise ValueError("each source needs exactly one of: " + ", ".join(SOURCE_KINDS))
+    kind = kinds[0]
+    raw = src[kind]
+    out: dict = {}
+    if kind == "gutenberg":
+        try:
+            out[kind] = int(raw)
+        except (TypeError, ValueError):
+            raise ValueError("gutenberg needs a book id (a number)")
+        if out[kind] < 1:
+            raise ValueError("gutenberg id must be positive")
+    elif kind == "files":
+        out[kind] = str(raw).strip()
+    else:  # a web source
+        url = str(raw).strip()
+        if not url.lower().startswith(("http://", "https://")):
+            raise ValueError(f"{kind} must be an http:// or https:// URL")
+        if len(url) > 2048:
+            raise ValueError("URL is too long")
+        out[kind] = url
+    for name, (lo, hi) in _SOURCE_INTS.items():
+        if name in src and str(src.get(name, "")).strip() != "":
+            try:
+                v = int(src[name])
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be a number")
+            out[name] = max(lo, min(hi, v))
+    for name in _SOURCE_STRS:
+        if src.get(name):
+            out[name] = str(src[name])[:400]
+    return out
+
+
+def editable_config(path: str) -> dict:
+    """The on-disk config as the app edits it (raw JSON, no path rewriting); TEMPLATE if missing."""
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            if path.endswith((".yaml", ".yml")):
+                from .yamlish import loads
+
+                cfg = loads(f.read())
+            else:
+                cfg = json.load(f)
+    else:
+        cfg = json.loads(json.dumps(TEMPLATE))
+    if not isinstance(cfg, dict):
+        raise ValueError("the config file is not an object")
+    return cfg
+
+
+def save_editable(path: str, updates: dict) -> dict:
+    """Merge the app's form fields into the config and write it atomically. Returns the saved config.
+
+    Only a known set of fields can be set this way; everything else in the file is preserved. The
+    sources list is fully replaced (and validated) when present. Raises ValueError on bad input."""
+    if not isinstance(updates, dict):
+        raise ValueError("expected an object of config fields")
+    cfg = editable_config(path)
+    if "enabled" in updates:
+        cfg["enabled"] = bool(updates["enabled"])
+    if "allow_private" in updates:
+        cfg["allow_private"] = bool(updates["allow_private"])
+    if "name" in updates:
+        name = str(updates["name"]).strip()[:120]
+        if name:
+            cfg["name"] = name
+    if "steps_per_run" in updates and str(updates.get("steps_per_run", "")).strip() != "":
+        try:
+            steps = int(updates["steps_per_run"])
+        except (TypeError, ValueError):
+            raise ValueError("steps_per_run must be a number")
+        cfg["steps_per_run"] = max(1, min(1_000_000, steps))
+    if "sources" in updates:
+        rows = updates["sources"]
+        if not isinstance(rows, list):
+            raise ValueError("sources must be a list")
+        cleaned = [_clean_source(r) for r in rows]
+        if not cleaned:
+            raise ValueError("add at least one source")
+        if len(cleaned) > 200:
+            raise ValueError("too many sources (max 200)")
+        cfg["sources"] = cleaned
+    # write atomically next to the file, then rename over it
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".libra-auto-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return cfg
 
 
 # ----------------------------------------------------------------- filters

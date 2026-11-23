@@ -35,7 +35,12 @@ class DebBuildTest(unittest.TestCase):
             for path in ("./usr/bin/libra", "./usr/share/libra/libra/cli.py",
                          "./usr/share/libra/plugins/codex.py",
                          "./lib/systemd/system/libra.service",
-                         "./lib/systemd/system/libra-codex.service"):
+                         "./lib/systemd/system/libra-codex.service",
+                         # desktop integration: menu launchers + themed app icon
+                         "./usr/share/applications/libra.desktop",
+                         "./usr/share/applications/libra-codex.desktop",
+                         "./usr/share/icons/hicolor/512x512/apps/libra.png",
+                         "./usr/share/icons/hicolor/scalable/apps/libra.svg"):
                 self.assertIn(path, contents, path)
 
             # the control archive carries the three maintainer scripts

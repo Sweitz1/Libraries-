@@ -107,7 +107,7 @@ function showTab(name) {
   for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
   for (const id of SECTIONS) $(id).hidden = id !== name;
   $("composer").hidden = name !== "chat";
-  if (name === "training") loadTraining();
+  if (name === "training") { loadConfig(); loadTraining(); }
   if (name === "agent") loadAgent();
   if (name === "skills" && !$("sk-list").childElementCount) searchSkills();
 }
@@ -305,6 +305,77 @@ async function loadTraining() {
     if (r.running) pollTimer = setTimeout(loadTraining, 3000);
   } catch (e) { $("au-report").textContent = "Error: " + e.message; }
 }
+
+// ------------------------------------------------------- training config
+let cfgSources = [], cfgKinds = ["crawl", "feed", "sitemap", "url", "gutenberg", "files"], cfgCanEdit = true;
+const KIND_HINT = { crawl: "https://… (a section to crawl)", feed: "https://…/feed.xml", sitemap: "https://…/sitemap.xml",
+                    url: "https://… (one page)", gutenberg: "book id, e.g. 1342", files: "a path, e.g. ~/notes" };
+const KIND_COUNT = { crawl: "max_pages", sitemap: "max_pages", feed: "max_items" };
+
+function kindValue(row) { for (const k of cfgKinds) if (k in row) return [k, row[k]]; return ["url", ""]; }
+
+function renderSources() {
+  const box = $("cfg-sources"); box.textContent = "";
+  cfgSources.forEach((row, i) => {
+    const [kind, value] = kindValue(row);
+    const sel = el("select", { "aria-label": "Source type", style: "flex:0 0 120px" },
+      ...cfgKinds.map((k) => el("option", Object.assign({ value: k, text: k }, k === kind ? { selected: "selected" } : {}))));
+    sel.addEventListener("change", () => {
+      for (const k of cfgKinds) delete row[k];
+      row[sel.value] = ""; renderSources();
+    });
+    const val = el("input", { value: value == null ? "" : String(value), placeholder: KIND_HINT[kind] || "",
+                              autocapitalize: "off", spellcheck: "false", style: "flex:1 1 160px" });
+    val.addEventListener("input", () => { row[kind] = val.value; });
+    const parts = [sel, val];
+    const countKey = KIND_COUNT[kind];
+    if (countKey) {
+      const n = el("input", { type: "number", min: "1", inputmode: "numeric", "aria-label": countKey.replace("_", " "),
+                              placeholder: countKey === "max_items" ? "items" : "pages", value: row[countKey] != null ? String(row[countKey]) : "",
+                              style: "flex:0 0 90px" });
+      n.addEventListener("input", () => { if (n.value.trim() === "") delete row[countKey]; else row[countKey] = n.value; });
+      parts.push(n);
+    }
+    const rm = el("button", { class: "btn small secondary", text: "✕", title: "Remove", "aria-label": "Remove source", style: "flex:0 0 auto" });
+    rm.addEventListener("click", () => { cfgSources.splice(i, 1); renderSources(); });
+    parts.push(rm);
+    box.append(el("div", { class: "row", style: "gap:8px;margin-bottom:8px;flex-wrap:wrap" }, ...parts));
+  });
+}
+
+async function loadConfig() {
+  try {
+    const r = await json("/v1/auto/config");
+    if (r._status === 403 || r.error) { $("au-config").hidden = true; return; }
+    $("au-config").hidden = false;
+    if (Array.isArray(r.source_kinds) && r.source_kinds.length) cfgKinds = r.source_kinds;
+    cfgCanEdit = r.can_edit !== false;
+    $("cfg-enabled").checked = !!r.enabled;
+    $("cfg-name").value = r.name || "";
+    $("cfg-steps").value = r.steps_per_run != null ? r.steps_per_run : "";
+    $("cfg-private").checked = !!r.allow_private;
+    cfgSources = Array.isArray(r.sources) ? r.sources.map((s) => Object.assign({}, s)) : [];
+    renderSources();
+    for (const id of ["cfg-enabled", "cfg-name", "cfg-steps", "cfg-private", "cfg-add", "cfg-save"]) $(id).disabled = !cfgCanEdit;
+    $("cfg-state").textContent = cfgCanEdit ? "" : "Only the owner (main token) can change these.";
+  } catch (e) { $("au-config").hidden = true; }
+}
+
+$("cfg-add").addEventListener("click", () => { cfgSources.push({ url: "" }); renderSources(); });
+$("cfg-reset").addEventListener("click", loadConfig);
+$("cfg-save").addEventListener("click", async () => {
+  $("cfg-state").textContent = "Saving…";
+  const body = { enabled: $("cfg-enabled").checked, name: $("cfg-name").value.trim(),
+                 allow_private: $("cfg-private").checked, sources: cfgSources };
+  const steps = $("cfg-steps").value.trim(); if (steps !== "") body.steps_per_run = steps;
+  try {
+    const r = await json("/v1/auto/config", body);
+    if (r.error) { $("cfg-state").textContent = r.error.message || "Could not save."; return; }
+    cfgSources = Array.isArray(r.sources) ? r.sources.map((s) => Object.assign({}, s)) : cfgSources;
+    renderSources();
+    $("cfg-state").textContent = "Saved. " + (r.enabled ? "Training is on." : "Training is off.");
+  } catch (e) { $("cfg-state").textContent = e.message; }
+});
 
 // ------------------------------------------------------- notifications
 function notifyDevice(title, body) {

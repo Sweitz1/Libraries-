@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Libra Lore Wiki
+GenericName=Lore Manager & World Engine
+Comment=Open the Libra codex: a local Fandom-style wiki for your worlds, continuities and characters
+Exec=xdg-open http://127.0.0.1:8800/
+Icon=libra
+Terminal=false
+Categories=Network;Utility;Education;
+Keywords=libra;wiki;codex;lore;worldbuilding;continuity;
+StartupNotify=false

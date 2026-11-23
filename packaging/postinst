@@ -53,6 +53,10 @@ PY
     runuser -u libra -- env LIBRA_HOME="$DATA/home" /usr/bin/libra trust accept-plugin "$f" >/dev/null 2>&1 || true
   done
 
+  # refresh the desktop menu + icon caches (only where a desktop is installed)
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications 2>/dev/null || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+
   # enable + start the service (only on a systemd host)
   if [ -d /run/systemd/system ]; then
     systemctl daemon-reload || true
@@ -63,6 +67,7 @@ PY
 
   echo "Libra installed. Token: $ETC/token"
   echo "  App/API on port 8000. Pair a device:  sudo libra-admin pair --token-file $ETC/token --name \"my phone\""
+  echo "  Desktop menu entry \"Libra\" opens the app (on a machine with a screen)."
   echo "  Worldbuilding suite is trusted:        sudo libra-admin skill list"
   echo "  Lore-wiki website (local, no login):   sudo systemctl enable --now libra-codex && \\"
   echo "                                         ssh -L 8800:127.0.0.1:8800 <you>@<this-host>  # then http://127.0.0.1:8800/"

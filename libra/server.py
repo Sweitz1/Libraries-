@@ -641,6 +641,27 @@ def make_handler(engine: Engine):
                     latest = {}
                 self._json(200, {"running": running, "status": text, "last": engine.auto_last, "progress": prog,
                                  "last_run": latest})
+            elif path == "/v1/auto/config":
+                if not engine.auto_config:
+                    self._error(404, "server was started without --auto-config")
+                    return
+                from . import auto
+
+                try:
+                    cfg = auto.editable_config(engine.auto_config)
+                except Exception as exc:
+                    self._error(500, f"could not read the config: {exc}")
+                    return
+                self._json(200, {
+                    "path": engine.auto_config,
+                    "enabled": bool(cfg.get("enabled", True)),
+                    "name": cfg.get("name", ""),
+                    "allow_private": bool(cfg.get("allow_private", False)),
+                    "steps_per_run": cfg.get("steps_per_run", 2000),
+                    "sources": cfg.get("sources", []),
+                    "source_kinds": list(auto.SOURCE_KINDS),
+                    "can_edit": self.principal == "owner",
+                })
             elif path == "/v1/skills":
                 from urllib.parse import parse_qs, urlsplit
 
@@ -726,6 +747,26 @@ def make_handler(engine: Engine):
                 return
             if path == "/v1/auto/run":
                 self._auto_run(bool(body.get("dry_run")))
+                return
+            if path == "/v1/auto/config":
+                if not engine.auto_config:
+                    self._error(404, "server was started without --auto-config")
+                    return
+                if self.principal != "owner":
+                    self._error(403, "only the owner can change the training configuration")
+                    return
+                from . import auto
+
+                try:
+                    cfg = auto.save_editable(engine.auto_config, body)
+                except ValueError as exc:
+                    self._error(400, str(exc))
+                    return
+                except Exception as exc:
+                    self._error(500, f"could not save the config: {exc}")
+                    return
+                self._json(200, {"saved": True, "enabled": bool(cfg.get("enabled", True)),
+                                 "sources": cfg.get("sources", [])})
                 return
             if path in ("/v1/workspace/ask", "/v1/workspace/correct", "/v1/workspace/rule"):
                 ws = engine.workspace

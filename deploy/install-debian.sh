@@ -100,7 +100,10 @@ if [ "$UNINSTALL" = 1 ]; then
   run_systemctl disable --now libra.service libra-auto.timer libra-agent.timer libra-discord.service libra-codex.service 2>/dev/null || true
   rm -f "$(r $UNITS)"/libra.service "$(r $UNITS)"/libra-auto.{service,timer} "$(r $UNITS)"/libra-agent.{service,timer} \
         "$(r $UNITS)/libra-discord.service" "$(r $UNITS)/libra-codex.service" \
-        "$(r /usr/local/bin/libra-admin)" "$(r /etc/avahi/services/libra.service)"
+        "$(r /usr/local/bin/libra-admin)" "$(r /etc/avahi/services/libra.service)" \
+        "$(r /usr/share/applications/libra.desktop)" "$(r /usr/share/applications/libra-codex.desktop)" \
+        "$(r /usr/share/icons/hicolor/32x32/apps/libra.png)" "$(r /usr/share/icons/hicolor/192x192/apps/libra.png)" \
+        "$(r /usr/share/icons/hicolor/512x512/apps/libra.png)" "$(r /usr/share/icons/hicolor/scalable/apps/libra.svg)"
   run_systemctl daemon-reload || true
   rm -rf "$(r $PREFIX)"
   echo "Libra removed. Your data and token are still in $DATA and $ETC (delete them yourself if you want)."
@@ -397,6 +400,56 @@ EOF
   run_systemctl enable --now avahi-daemon.service >/dev/null 2>&1 || true
 fi
 
+# ---------------------------------------------------------------- desktop integration
+# Applications-menu launchers and the "libra" icon, so Libra appears in the desktop menu
+# (Raspberry Pi OS Desktop, GNOME, KDE, ...) and opens the web app in a browser.
+mkdir -p "$(r /usr/share/applications)"
+cat > "$(r /usr/share/applications)/libra.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Libra
+GenericName=AI Control Hub
+Comment=Open the Libra app: self-hosted model, agent, knowledge base and world engine
+Exec=xdg-open http://localhost:$PORT/
+Icon=libra
+Terminal=false
+Categories=Network;Utility;Development;Education;
+Keywords=libra;ai;llm;agent;assistant;wiki;worldbuilding;
+StartupNotify=false
+EOF
+if [ "$CODEX" = 1 ]; then
+  cat > "$(r /usr/share/applications)/libra-codex.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Libra Lore Wiki
+GenericName=Lore Manager & World Engine
+Comment=Open the Libra codex: a local Fandom-style wiki for your worlds, continuities and characters
+Exec=xdg-open http://$CODEX_HOST:$CODEX_PORT/
+Icon=libra
+Terminal=false
+Categories=Network;Utility;Education;
+Keywords=libra;wiki;codex;lore;worldbuilding;continuity;
+StartupNotify=false
+EOF
+fi
+for pair in "favicon-32.png:32x32" "icon-192.png:192x192" "icon-512.png:512x512"; do
+  png="${pair%%:*}"; size="${pair##*:}"
+  if [ -f "$SRC_DIR/libra/webui/$png" ]; then
+    mkdir -p "$(r /usr/share/icons/hicolor/$size/apps)"
+    cp "$SRC_DIR/libra/webui/$png" "$(r /usr/share/icons/hicolor/$size/apps)/libra.png"
+  fi
+done
+if [ -f "$SRC_DIR/libra/webui/icon.svg" ]; then
+  mkdir -p "$(r /usr/share/icons/hicolor/scalable/apps)"
+  cp "$SRC_DIR/libra/webui/icon.svg" "$(r /usr/share/icons/hicolor/scalable/apps)/libra.svg"
+fi
+if [ -z "$ROOT" ]; then
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q /usr/share/applications 2>/dev/null || true
+  command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+fi
+
 cat > "$(r /usr/local/bin)/libra-admin" <<EOF
 #!/bin/sh
 # Run a libra command as the service user, with the service's data. Example: libra-admin kb add /path/to/notes
@@ -440,6 +493,7 @@ echo "   Pair another device (new QR code):  sudo libra-admin pair --token-file 
 echo "   Paired devices / revoke one:        sudo libra-admin devices list  |  sudo libra-admin devices revoke <id>"
 echo "   OpenAI-compatible apps (Nexus Agent): base URL = one of the addresses above + /v1, API key = the token"
 echo "   Logs: journalctl -u libra -f        Token: $ETC/token"
+echo "   Desktop: on a machine with a screen, open \"Libra\" from the applications menu (opens the app)."
 echo "   Training: edit $DATA/libra-auto.json (sources, then \"enabled\": true); runs nightly at $TRAIN_AT"
 if [ "$PLUGINS" = 1 ]; then
   echo "   Plugins: the suite is installed and trusted in $PLUGIN_DIR (sudo libra-admin skill list to see them)."
