@@ -4,6 +4,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-23
+
 ### Added
 - **Desktop integration** (`deploy/desktop/`, `packaging/build-deb.sh`, `deploy/install-debian.sh`): the `.deb` and the shell installer now add applications-menu launchers ("Libra" → the app; "Libra Lore Wiki" → the codex site) and install the app icon into the `hicolor` icon theme, so on a machine with a screen (Raspberry Pi OS Desktop, GNOME, KDE) Libra appears in the menu and opens in a browser. The menu/icon caches are refreshed on install where a desktop is present; `--uninstall` / package removal take the launchers and icons back out.
 - **Configuration page in the app** (`libra/webui/`, `libra/server.py`, `libra/auto.py`): the Training tab now has a GUI **Configuration** panel to edit the training config with fields instead of hand-editing `libra-auto.json` — an on/off toggle, model name, steps-per-run, an allow-private toggle, and a field-based **sources editor** (a per-row type dropdown of `crawl`/`feed`/`sitemap`/`url`/`gutenberg`/`files`, a value field, and a per-row page/item limit; add and remove rows). It is backed by `GET`/`POST /v1/auto/config`: reads are available to any signed-in device, **writes are owner-only** (main token), every source is validated (one kind per row, web kinds must be `http(s)`, numeric options are bounded), unlisted config fields and extra per-row fields are preserved, and the file is written atomically.
