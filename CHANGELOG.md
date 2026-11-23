@@ -4,6 +4,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-23
+
 ### Added
 - **MCP server — Libra's skills as tools for Claude** (`libra/mcpserver.py`, `libra mcp serve`): the mirror of the existing MCP *client*. `libra mcp serve` speaks JSON-RPC 2.0 over stdio (`initialize` / `tools/list` / `tools/call` / `ping`) and exposes the whole skill registry — the lore/world engine (`codex_*`), `worldbook`/`world_build`, the `fic_*` and `card` tools, `calc`, translation, memory, web skills — so an MCP host such as Claude Code or the Claude desktop app can list and call them as native tools (`claude mcp add libra -- libra mcp serve`). Every `tools/call` runs through the same trust gate: read-only skills run, a write/danger skill is refused with a message to `libra trust allow <name>` first (a host can't be prompted mid-call), and plugin skills appear only once the plugin is trusted. Only stdout carries the protocol; logs go to stderr.
 
