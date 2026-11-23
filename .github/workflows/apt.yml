@@ -1,0 +1,62 @@
+name: apt-repo
+
+# Publishes an APT repository to GitHub Pages so users can `sudo apt install libra` and upgrade with apt.
+# It bundles the libra_*.deb from every GitHub release, so apt sees all versions and installs the newest.
+#
+# One-time setup by a repo admin: Settings -> Pages -> Source = "GitHub Actions".
+# Optional signing (recommended): add a secret APT_GPG_PRIVATE_KEY (an ASCII-armored private key) and
+# APT_GPG_KEY_ID; without them the repo is published unsigned and the install line uses [trusted=yes].
+on:
+  release:
+    types: [published]     # refresh the repo whenever a release is published
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Collect the .deb packages from all releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p pool
+          for tag in $(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName -q '.[].tagName'); do
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern 'libra_*.deb' --dir pool --clobber 2>/dev/null || true
+          done
+          echo "packages:"; ls -1 pool || true
+          ls pool/*.deb >/dev/null 2>&1 || { echo "::error::no libra_*.deb found in any release yet"; exit 1; }
+
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      - name: Import the signing key (if provided)
+        if: ${{ secrets.APT_GPG_PRIVATE_KEY != '' }}
+        run: |
+          echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
+          echo "APT_SIGN_KEY=${{ secrets.APT_GPG_KEY_ID }}" >> "$GITHUB_ENV"
+
+      - name: Build the APT repository
+        env:
+          APT_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: bash packaging/build-apt-repo.sh --out apt-repo --pool pool
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apt-repo
+
+      - uses: actions/deploy-pages@v4
+        id: deploy

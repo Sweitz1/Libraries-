@@ -72,7 +72,8 @@ has a ready-made wheel (`pip install libra_lm-*.whl`) and a `SHA256SUMS` file to
 
 **Prefer a Debian package?** On a Raspberry Pi or Debian/Ubuntu box you can build and install a native
 `.deb` instead of the shell installer in lesson 4 — it sets up the service, plugins and lore-wiki the same
-way: `bash packaging/build-deb.sh` then `sudo apt install ./dist/libra_*_all.deb`. See
+way: `bash packaging/build-deb.sh` then `sudo apt install ./dist/libra_*_all.deb`. Or add the **APT
+repository** (built from each release) once and install/upgrade by name with `sudo apt install libra`. See
 [packaging/README.md](packaging/README.md).
 
 **Check it worked**
