@@ -63,6 +63,10 @@ PY
     systemctl enable --now libra.service >/dev/null 2>&1 || true
     systemctl enable --now libra-auto.timer libra-agent.timer >/dev/null 2>&1 || true
     systemctl enable avahi-daemon.service >/dev/null 2>&1 || true
+    # Discord bot: wired at boot but held dormant (ConditionPathExists) until a token is set up.
+    # Start it now if a token is already present (e.g. an upgrade, or you ran 'discord setup' first).
+    systemctl enable libra-discord.service >/dev/null 2>&1 || true
+    [ -s "$DATA/home/discord-token" ] && systemctl start libra-discord.service >/dev/null 2>&1 || true
   fi
 
   echo "Libra installed. Token: $ETC/token"
@@ -71,6 +75,7 @@ PY
   echo "  Worldbuilding suite is trusted:        sudo libra-admin skill list"
   echo "  Lore-wiki website (local, no login):   sudo systemctl enable --now libra-codex && \\"
   echo "                                         ssh -L 8800:127.0.0.1:8800 <you>@<this-host>  # then http://127.0.0.1:8800/"
+  echo "  Discord bot (optional, off until set):  sudo libra-admin discord setup   # then: sudo systemctl start libra-discord"
 fi
 
 exit 0

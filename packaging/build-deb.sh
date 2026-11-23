@@ -164,6 +164,26 @@ $HARDEN
 WantedBy=multi-user.target
 EOF
 
+cat > "$STAGE/lib/systemd/system/libra-discord.service" <<EOF
+[Unit]
+Description=Libra: Discord bot
+After=network-online.target libra.service
+Wants=network-online.target
+# Stays dormant until a token exists. Add one with:  sudo libra-admin discord setup
+ConditionPathExists=/var/lib/libra/home/discord-token
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+[Service]
+Type=simple
+$COMMON
+ExecStart=/usr/bin/libra discord run --token-file /var/lib/libra/home/discord-token --workspace /var/lib/libra/workspace --model /var/lib/libra/checkpoints/auto --auto-config /var/lib/libra/libra-auto.json
+Restart=on-failure
+RestartSec=30
+$HARDEN
+[Install]
+WantedBy=multi-user.target
+EOF
+
 cat > "$STAGE/etc/avahi/services/libra.service" <<'EOF'
 <?xml version="1.0" standalone='no'?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">

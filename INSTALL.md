@@ -341,6 +341,8 @@ libra.chat("what is (2+3)*4");
 4. Allow yourself: in Discord, turn on Developer Mode, *Copy User ID*, then `sudo libra-admin discord allow <id>`.
 5. Mention it: `@Libra help`.
 
+On a **Debian-package / APT** install there's no `--discord` flag — set the token up with `sudo libra-admin discord setup` (hidden prompt; saves it under the service user), then the packaged `libra-discord.service` picks it up: `sudo systemctl start libra-discord` (it also starts on boot once a token exists). Manage it with `systemctl status libra-discord` and `journalctl -u libra-discord -f`.
+
 **Quiz**
 
 1. Why give Nexus Agent its own device token instead of the main token?

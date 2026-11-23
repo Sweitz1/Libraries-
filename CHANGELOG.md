@@ -4,6 +4,9 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+### Added
+- **Managed Discord service in the Debian package** (`packaging/`): the `.deb` now ships `libra-discord.service`, so a `.deb`/APT install gets an always-on Discord bot like the app and the codex site, instead of a foreground `libra discord run`. It's enabled at boot but held dormant by `ConditionPathExists=/var/lib/libra/home/discord-token` until a token is set up (`sudo libra-admin discord setup`); the postinst starts it right away if a token is already present (e.g. on upgrade). Manage it with `systemctl status/restart libra-discord` and `journalctl -u libra-discord -f`. (The source installer's `--discord` already did this; now the package does too.)
+
 ## [0.19.0] - 2026-11-23
 
 ### Added

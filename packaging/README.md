@@ -25,7 +25,8 @@ That installs, and starts at boot:
 
 - `/usr/bin/libra` and `/usr/bin/libra-admin`
 - the code under `/usr/share/libra` (depends on the system `python3` + `python3-numpy`)
-- the systemd units `libra.service`, `libra-auto.timer`, `libra-agent.timer`, `libra-codex.service`
+- the systemd units `libra.service`, `libra-auto.timer`, `libra-agent.timer`, `libra-codex.service`,
+  `libra-discord.service` (dormant until a Discord token is set up)
 - the **plugin suite** (worldbuilding/lorebook, fanfiction, cards, codex, document ingest) into
   `/var/lib/libra/home/plugins`, trusted for the service
 
@@ -37,6 +38,8 @@ sudo libra-admin pair --token-file /etc/libra/token --name "my phone"   # pair a
 sudo libra-admin skill list                                             # the suite is trusted
 sudo systemctl enable --now libra-codex                                 # the lore-wiki site (127.0.0.1:8800)
 ssh -L 8800:127.0.0.1:8800 <you>@<host>                                 # then open http://127.0.0.1:8800/
+sudo libra-admin discord setup                                          # Discord bot: paste token (hidden), then:
+sudo systemctl start libra-discord                                      # (auto-starts on boot once a token exists)
 ```
 
 ## Remove it

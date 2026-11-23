@@ -36,6 +36,7 @@ class DebBuildTest(unittest.TestCase):
                          "./usr/share/libra/plugins/codex.py",
                          "./lib/systemd/system/libra.service",
                          "./lib/systemd/system/libra-codex.service",
+                         "./lib/systemd/system/libra-discord.service",
                          # desktop integration: menu launchers + themed app icon
                          "./usr/share/applications/libra.desktop",
                          "./usr/share/applications/libra-codex.desktop",
