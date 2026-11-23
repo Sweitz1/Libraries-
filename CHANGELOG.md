@@ -4,6 +4,8 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-11-23
+
 ### Fixed
 - **`libra mcp add NAME --url …` now works.** The trailing command argument used `argparse.REMAINDER`, which swallowed `--url`/`--header`/`--env` (they were treated as the server command, so adding an HTTP/SSE MCP server such as `connect.composio.dev/mcp` failed with "cannot start MCP server: --url not found"). Switched to `nargs="*"`, so the documented `--url` form parses in any position and the `-- <command>` stdio form still works. (Workaround on older versions: write `~/.libra/mcp.json` by hand, then `libra mcp sync`.)
 
