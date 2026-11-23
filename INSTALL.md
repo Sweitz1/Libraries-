@@ -437,6 +437,36 @@ lets `worldbook`/`world_build` read your own codex like a Fandom wiki. It binds 
 it on `0.0.0.0` (no auth). Libra renders cards and pages from your data but has **no image model**, so it
 doesn't draw artwork — upload your own with `--image`.
 
+## Optional: use Libra from Claude Code (MCP)
+
+Libra can act as an **MCP server**, so Claude Code (or the Claude desktop app) lists and calls Libra's
+skills — the lore/world engine (`codex_*`), `worldbook`, the fanfiction and card tools, `calc`,
+translation, memory — as native tools. Run this on the machine where you use Claude Code (both `claude`
+and `libra` must be on its PATH):
+
+```bash
+claude mcp add libra -- libra mcp serve
+claude mcp list                               # libra: ✓ Connected
+```
+
+The tools then appear in your Claude Code session. Every call still goes through Libra's trust gate:
+read-only skills run; a write/danger one (e.g. `codex_add`) is refused until you allow it once —
+
+```bash
+libra trust allow codex_add
+```
+
+**Debian-package (`.deb`) installs:** the plugin suite is trusted under the *service* user's home, so point
+the MCP server at it to expose the world engine (otherwise only the built-in skills show up):
+
+```bash
+claude mcp add libra -- env LIBRA_HOME=/var/lib/libra/home libra mcp serve
+```
+
+On a source/`pip` install, trust the plugins in your own home instead (`libra trust accept-plugin
+~/.libra/plugins/codex.py`, as above), then plain `libra mcp serve` is enough. Only stdout carries the MCP
+protocol; logs go to stderr.
+
 ## Where next
 
 - **Use it:** the [README](README.md) covers training, goals, the knowledge base, translation and skills.
