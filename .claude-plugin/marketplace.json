@@ -11,7 +11,7 @@
       "displayName": "Libra skills",
       "source": "./",
       "description": "Skills for a Libra checkout: learn the code by writing it yourself (tutor), verify changes, run the app, answer reviews, add Libra skills, explain the code (how, why), keep changes small (yagni, reducer), validate configs and data, release and deploy",
-      "version": "0.16.0",
+      "version": "0.17.0",
       "author": {
         "name": "Sweitz1",
         "url": "https://github.com/Sweitz1"

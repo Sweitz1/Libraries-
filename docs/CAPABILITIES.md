@@ -1,4 +1,4 @@
-# Libra — capabilities (v0.16.0)
+# Libra — capabilities (v0.17.0)
 
 What Libra can do today, area by area. Libra is a from-scratch GPT-style language model and a set of
 tools around it, written in Python. The only runtime dependency is **NumPy** (CuPy is optional for an
