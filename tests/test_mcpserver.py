@@ -111,5 +111,37 @@ class ServeLoopTest(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())["error"]["code"], mcpserver.PARSE_ERROR)
 
 
+class CliAddParsingTest(unittest.TestCase):
+    """`libra mcp add NAME --url …` must parse: a REMAINDER command arg used to swallow --url/--header."""
+
+    def _parse(self, line):
+        import shlex
+
+        from libra.cli import build_parser
+
+        return build_parser().parse_args(shlex.split(line))
+
+    def test_url_flag_after_name(self):
+        a = self._parse("mcp add composio --url https://connect.composio.dev/mcp --header 'x-consumer-api-key: ${K}'")
+        self.assertEqual(a.action, "add")
+        self.assertEqual(a.name, "composio")
+        self.assertEqual(a.url, "https://connect.composio.dev/mcp")
+        self.assertEqual(a.header, ["x-consumer-api-key: ${K}"])
+        self.assertEqual(a.command, [])
+
+    def test_url_flag_before_name(self):
+        a = self._parse("mcp add --url https://x/mcp remote")
+        self.assertEqual((a.action, a.name, a.url), ("add", "remote", "https://x/mcp"))
+
+    def test_stdio_command_after_dashdash(self):
+        a = self._parse("mcp add files -- npx -y @modelcontextprotocol/server-filesystem /home/me")
+        self.assertEqual(a.name, "files")
+        self.assertIsNone(a.url)
+        self.assertEqual(a.command, ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home/me"])
+
+    def test_serve_action(self):
+        self.assertEqual(self._parse("mcp serve").action, "serve")
+
+
 if __name__ == "__main__":
     unittest.main()

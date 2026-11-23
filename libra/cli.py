@@ -1115,7 +1115,7 @@ def build_parser() -> argparse.ArgumentParser:
     m = sub.add_parser("mcp", help="connect MCP servers and use their tools as skills, or serve Libra's own")
     m.add_argument("action", choices=["add", "remove", "list", "sync", "serve"])
     m.add_argument("name", nargs="?")
-    m.add_argument("command", nargs=argparse.REMAINDER, help="add: the command that starts the server, after --")
+    m.add_argument("command", nargs="*", help="add: the command that starts the server, after --")
     m.add_argument("--url", help="add: Streamable HTTP endpoint instead of a command")
     m.add_argument("--header", action="append", default=[], help='add: "Name: value" (use ${VAR} for secrets)')
     m.add_argument("--env", action="append", default=[], help="add: NAME=value for the server process")
