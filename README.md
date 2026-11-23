@@ -52,6 +52,7 @@ For a reviewer's map of every app, server, service and capability, with links to
 | `libra/skills.py` | Skills (tools), plugin loader, message routing, built-in skills |
 | `libra/catalog.py` | Skill catalog: SQLite with an inverted BM25 index, lazy loading, schema-based argument checking |
 | `libra/mcp.py` | MCP client (stdio and Streamable HTTP) that syncs server tools into the catalog |
+| `libra/mcpserver.py` | MCP server (stdio) that exposes Libra's own skills to an MCP host, trust-gated |
 | `libra/openapi.py`, `libra/yamlish.py` | OpenAPI/Swagger importer and caller; a small YAML reader for specs |
 | `libra/trust.py` | Risk levels, allow/ask/deny rules, confirmation prompts, audit log |
 | `libra/translate.py`, `libra/lang.py` | Translation memory, IBM Model 1 alignment, adaptation, glossing, pivoting; language detection and romanization |
@@ -657,6 +658,14 @@ libra mcp remove files
 ```
 
 Servers are saved in `~/.libra/mcp.json`, in the same format other MCP apps use, so you can copy entries across. `${VAR}` in headers and env values is filled from your environment, so tokens stay out of the file. Server logs go to `~/.libra/mcp-stderr.log`.
+
+**The other way round — Libra *as* an MCP server.** `libra mcp serve` exposes Libra's own skills (the worldbuilding/lore engine `codex_*`, `worldbook`, the fanfiction and card tools, `calc`, translation, …) over MCP stdio, so an MCP host such as Claude Code or the Claude desktop app can list and call them as native tools. In Claude Code:
+
+```bash
+claude mcp add libra -- libra mcp serve     # or: libra --plugins ~/my-plugins mcp serve
+```
+
+Every call runs through the same **trust gate**: read-only skills (`codex_search`, `codex_get`, …) run; a write or danger skill is refused with a message to run `libra trust allow <name>` first (an MCP host can't be prompted mid-call), and plugin skills appear only once the plugin is trusted (`libra trust accept-plugin`). Only stdout carries the protocol; logs go to stderr.
 
 ### Web APIs (OpenAPI / Swagger)
 

@@ -369,6 +369,22 @@ def cmd_mcp(args) -> None:
     from . import mcp
     from .catalog import Catalog
 
+    if args.action == "serve":
+        from . import mcpserver
+        from .skills import default_registry
+        from .trust import Policy
+
+        # stdout carries the JSON-RPC protocol only; everything else (plugin-load lines, errors) goes to stderr.
+        to_stderr = lambda m: print(m, file=sys.stderr, flush=True)  # noqa: E731
+        if getattr(args, "allow_private", False):
+            os.environ["LIBRA_ALLOW_PRIVATE"] = "1"
+        # Non-interactive: an MCP host can't answer an "ask" prompt, so "ask" skills are refused
+        # (allow them first with: libra trust allow <name>). --yes approves "ask"; "deny" still wins.
+        confirm = (lambda skill, a: True) if getattr(args, "yes", False) else None  # noqa: E731
+        reg = default_registry(getattr(args, "plugins", None) or [], log=to_stderr, policy=Policy(), confirm=confirm)
+        mcpserver.serve(reg, log=to_stderr)
+        return
+
     servers = mcp.load_config()
     if args.action == "list":
         if not servers:
@@ -1096,13 +1112,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_skill_flags(k)
     k.set_defaults(func=cmd_skill)
 
-    m = sub.add_parser("mcp", help="connect MCP servers and use their tools as skills")
-    m.add_argument("action", choices=["add", "remove", "list", "sync"])
+    m = sub.add_parser("mcp", help="connect MCP servers and use their tools as skills, or serve Libra's own")
+    m.add_argument("action", choices=["add", "remove", "list", "sync", "serve"])
     m.add_argument("name", nargs="?")
     m.add_argument("command", nargs=argparse.REMAINDER, help="add: the command that starts the server, after --")
     m.add_argument("--url", help="add: Streamable HTTP endpoint instead of a command")
     m.add_argument("--header", action="append", default=[], help='add: "Name: value" (use ${VAR} for secrets)')
     m.add_argument("--env", action="append", default=[], help="add: NAME=value for the server process")
+    _add_skill_flags(m)  # serve: --plugins, --allow-private
+    m.add_argument("--yes", action="store_true", help="serve: approve skills that would ask (deny rules still apply)")
     m.set_defaults(func=cmd_mcp)
 
     ap = sub.add_parser("api", help="import OpenAPI/Swagger specs: one skill per endpoint")
