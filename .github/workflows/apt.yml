@@ -44,10 +44,16 @@ jobs:
         id: pages
 
       - name: Import the signing key (if provided)
-        if: ${{ secrets.APT_GPG_PRIVATE_KEY != '' }}
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          APT_GPG_KEY_ID: ${{ secrets.APT_GPG_KEY_ID }}
         run: |
-          echo "${{ secrets.APT_GPG_PRIVATE_KEY }}" | gpg --batch --import
-          echo "APT_SIGN_KEY=${{ secrets.APT_GPG_KEY_ID }}" >> "$GITHUB_ENV"
+          if [ -n "$APT_GPG_PRIVATE_KEY" ]; then
+            printf '%s\n' "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+            echo "APT_SIGN_KEY=$APT_GPG_KEY_ID" >> "$GITHUB_ENV"
+          else
+            echo "No APT_GPG_PRIVATE_KEY secret: building an unsigned repo."
+          fi
 
       - name: Build the APT repository
         env:
