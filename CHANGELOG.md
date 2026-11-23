@@ -4,6 +4,9 @@ Notable changes to Libra. Versions follow [semantic versioning](https://semver.o
 
 ## [Unreleased]
 
+### Added
+- **APT repository** (`packaging/build-apt-repo.sh`, `.github/workflows/apt.yml`): the `.deb` can be served from an APT repo so users `sudo apt install libra` and upgrade with `apt` instead of downloading each file. The builder turns the `.deb`s into a static, hostable repo (pool + `Packages`/`Release`, optionally GPG-signed); the `apt-repo` workflow bundles the `.deb`s from every release and deploys the repo to GitHub Pages on each release (one-time: Settings → Pages → Source = GitHub Actions). See `packaging/README.md`.
+
 ## [0.17.0] - 2026-11-23
 
 ### Added
